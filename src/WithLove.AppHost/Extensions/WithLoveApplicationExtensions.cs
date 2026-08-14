@@ -152,6 +152,7 @@ internal static partial class WithLoveApplicationExtensions
     {
         var temporalServer = builder.AddTemporalDevContainer("temporal-server", options =>
         {
+            options.ImageTag = "1.7.2";
             options.Namespace = "default";
             options.SearchAttributes =
             [

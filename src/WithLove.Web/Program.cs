@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Stripe.Extensions.AspNetCore;
 using WithLove.Web;
 using WithLove.Web.Components;
+using WithLove.Workflows.Chat;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
 
@@ -171,6 +172,7 @@ builder.Services.AddScoped(sp =>
 builder.Services.AddScoped<IOrderService, StripeOrderService>();
 
 builder.Services.AddScoped<ChatService>();
+builder.Services.AddScoped<IGiftShopChatWorkflowClient, GiftShopChatWorkflowClient>();
 
 builder.Services.AddScoped<ILoyaltyService, TemporalLoyaltyService>();
 
@@ -186,6 +188,7 @@ builder.Services.AddTemporalClient(opts =>
         opts.Tls = connectOptions.Tls; // TlsOptions; null is fine — SDK auto-enables TLS when ApiKey is set
     }
 });
+builder.Services.AddGiftShopChatWorkflowClient();
 
 var app = builder.Build();
 

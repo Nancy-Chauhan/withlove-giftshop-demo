@@ -13,4 +13,5 @@ public static class TestTraits
     public const string Validation = "Validation";
     public const string ProductApi = "ProductApi";
     public const string Orders = "Orders";
+    public const string Chat = "Chat";
 }

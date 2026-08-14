@@ -437,16 +437,22 @@ destroy environment="azureprod" timeout="3600":
 
 # Run all tests
 test:
-    dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj --logger "console;verbosity=normal"
+    dotnet test {{solution}} --logger "console;verbosity=normal"
 
 # Run unit tests only (fast, no Docker required)
 test-unit:
-    dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj \
+    dotnet test {{solution}} \
         --filter "Category=Unit" \
         --logger "console;verbosity=normal"
 
 # Run integration tests only (requires Docker for SQL Server + Redis)
 test-integration:
-    dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj \
+    dotnet test {{solution}} \
         --filter "Category=Integration" \
+        --logger "console;verbosity=normal"
+
+# Run the package-backed chat integration lane (local Temporal only; no Docker/OpenAI)
+test-chat-integration:
+    dotnet test tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj \
+        --filter "Category=Integration&Feature=Chat" \
         --logger "console;verbosity=normal"

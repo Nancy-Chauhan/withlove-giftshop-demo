@@ -180,23 +180,26 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 
 ## Chat Assistant (LA)
 
-**Temporal Workflow** (`ChatAgentWorkflow`):
-- Long-lived session per user (24h idle timeout, resumable via `IdConflictPolicy.UseExisting`)
-- Update: `SendMessageAsync(ChatRequest)` — processes single user message, returns `ChatResponse`
-- Query: `GetHistory()` — retrieves conversation history for UI hydration on reconnect
-- Signal: `EndSessionAsync()` — graceful shutdown and cache cleanup
+**Temporal Workflow** (`WithLove.GiftShopChatWorkflow`):
+- Package-backed durable session per user with a 24-hour workflow-run lifetime
+- Update: `SendMessageAsync(DurableSessionRequest)` — processes one durable model/tool turn
+- Query: `GetHistory()` — retrieves display-projected conversation history for UI hydration
+- Signal: `RequestShutdownAsync()` — graceful session shutdown
+- Every model step runs as `GetChatStep`; every tool invocation runs as a separate `InvokeFunction` activity
+- Tool iteration is explicitly capped at 40; incomplete turns apply no cart/navigation commands
 
-**AI Activities** (`ChatAgentActivities`):
+**Durable AI tools** (`GiftShopChatToolService` + `GiftShopChatToolCatalog`):
 - System prompt defines LA personality: warm, playful, conversational
 - Tools: `search_products`, `get_product_details`, `get_categories`, `browse_category`, `add_to_cart`, `remove_from_cart`, **`view_cart`**, **`clear_cart`**
 - Tool results are concise summaries, not raw JSON, to reduce token usage and improve accuracy
-- Cart operations: view_cart reads from snapshot (zero HTTP calls), clear_cart and remove_from_cart emit actions locally
+- Typed turn state accumulates cart/navigation commands sequentially and Web applies them only after a final response
+- `AddDurableAI` configures the shared worker's data converter; manually created Temporal clients must use `DurableAIDataConverter.Instance`
 
 **Blazor Integration** (`ChatService`):
 - Scoped service bridges Blazor UI ↔ Temporal workflow
-- Auth-based session IDs: `chat-{userId}` (resumable) or `chat-anon-{guid}` (ephemeral)
-- Builds cart snapshot on each message → workflow → activity for accurate `view_cart` results
-- Applies cart actions locally (Add/Remove/Clear) after inference completes
+- Auth-based session IDs: `giftshop-chat-{userId}` or `giftshop-chat-anon-{guid}`
+- Builds a cart snapshot for each turn so durable tools can evaluate current cart state
+- Applies cart actions locally only when the workflow returns `FinalResponse`
 
 **UI** (`ChatFab.razor` + `ChatMessageContent.razor`):
 - FAB pill button (unchanged text "Chat with Love") toggles chat panel
@@ -396,4 +399,3 @@ gh release create v1.0.0 --title "Version 1.0.0"
 gh release list
 
 ```
-

@@ -2,7 +2,7 @@
 
 <img src="docs/image.png" alt="WithLove Gift Shop" width="70%" />
 
-WithLove is a sample e-commerce applicaiton that shows how AI can be integrated into a web application. It includes a curated gift shop with hybrid search (full-text + vector), and an AI-powered chat shopping assistant. 
+WithLove is a sample e-commerce application that shows how AI can be integrated into a web application. It includes a curated gift shop with hybrid search (full-text + vector), and an AI-powered chat shopping assistant.
 The sample also uses OpenAI models for inference and embedding generation.
 
 ## Prerequisites
@@ -12,6 +12,9 @@ The sample also uses OpenAI models for inference and embedding generation.
 - [Stripe CLI](https://github.com/stripe/stripe-cli) — for local webhook forwarding (`brew install stripe/stripe-cli/stripe` on macOS)
 - **OpenAI API key** — used by the chat assistant and embedding generation
 - **Stripe API keys** (test mode) — used for checkout
+
+Local development pins `temporalio/temporal:1.7.2` (Temporal Server 1.31.1), which satisfies the
+durable AI extension's Temporal Server 1.31.0 minimum.
 
 ## Configuration
 
@@ -24,7 +27,7 @@ aspire secret set Parameters:openai-api-key "<your-openai-key>"
 aspire secret set Parameters:stripe-api-key "<your-stripe-secret-key>"
 aspire secret set Parameters:stripe-public-key "<your-stripe-public-key>"
 aspire secret set Parameters:stripe-webhook-secret "<whsec_...>"  # printed by stripe listen on first run
-aspire secret set Parameters:redisCache-password "<local-redis-password>"
+aspire secret set Parameters:redis-password "<local-redis-password>"
 ```
 
 Verify your secrets are stored:
@@ -78,7 +81,7 @@ To stop, press `Ctrl+C` in the terminal.
 ## Key Features
 
 - **Hybrid Search** — Full-text search (SQL Server FTS) combined with vector similarity (OpenAI embeddings), merged via Reciprocal Rank Fusion
-- **Chat Assistant (LA)** — Temporal-backed conversational shopping assistant using `Microsoft.Extensions.AI` with tool calling for product search, cart management, and recommendations
+- **Chat Assistant (LA)** — Package-backed durable agent using `TemporalCommunity.Extensions.AI` 0.12.1 and `Microsoft.Extensions.AI`, with every model step and tool invocation recorded as a separate Temporal activity; capped turns discard unapplied tool protocol before the next turn
 - **Stripe Web elements** — Server-side Checkout Sessions with the Payment and Address elements integrated
 - **FusionCache + Redis** — Multi-layer caching with tag-based invalidation and Redis backplane for cross-instance sync
 - **Temporal Workflows** — Durable database setup, Stripe order processing, customer onboarding, and long-lived chat sessions
@@ -89,12 +92,23 @@ The application uses Temporal for durable, long-lived operations:
 
 | Workflow | Purpose | Key Features |
 |----------|---------|--------------|
-| **ChatAgentWorkflow** | Long-lived chat session per user | 24h idle timeout; resumable via `IdConflictPolicy.UseExisting`; Update/Query/Signal pattern for async message handling |
+| **WithLove.GiftShopChatWorkflow** | Durable chat session per user | Typed sequential tool state; separate model/tool activities; 24-hour workflow-run lifetime; Update/Query/Signal session API; continue-as-new history bounds |
 | **DatabaseSetupWorkflow** | Schema initialization on app startup | Runs full-text search index creation, vector column setup, and initial data seeding; executes once per deployment |
 | **StripeCheckoutOrderWorkflow** | Order processing pipeline | Coordinates Stripe Checkout Session creation, webhook verification, and order fulfillment with retry logic |
 | **CustomerOnboardingWorkflow** | New customer registration flow | Creates Stripe customer record and links to user account; ensures customer data is synced with payment processor |
 
 **Access Temporal UI**: The Aspire dashboard provides a **Temporal UI** link showing all workflows, executions, task queues, and event histories.
+
+See [Durable AI chat architecture](docs/temporal-ai-chat.md) for registration, state, retries,
+payload disclosure, observability, and troubleshooting details.
+
+## Tests
+
+```bash
+just test-unit              # solution-wide unit tests, including replay regression
+just test-chat-integration  # scripted model + fake HTTP + local Temporal; no OpenAI or Docker
+just test-integration       # all integration tests; Products API tests require Docker
+```
 
 ## Azure Deployment
 

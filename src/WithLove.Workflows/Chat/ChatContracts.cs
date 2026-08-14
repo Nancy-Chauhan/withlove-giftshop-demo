@@ -1,13 +1,20 @@
 namespace WithLove.Workflows.Chat;
 
-/// <summary>Sent from client to workflow update.</summary>
-public record ChatRequest(string UserMessage, List<CartSnapshot>? Cart = null, UserContext? User = null);
-
-/// <summary>Authenticated user identity passed to the AI for personalisation.</summary>
+/// <summary>Trusted Web-created user context used for prompt personalization and tool reads.</summary>
 public record UserContext(string? Name, string? Email, string? UserId = null);
 
-/// <summary>Returned from workflow update to client.</summary>
-public record ChatResponse(string AssistantMessage, List<CartAction> CartActions, List<NavigationAction> NavigationActions);
+/// <summary>Application data available to durable tool activities for one chat turn.</summary>
+public sealed record GiftShopChatRequestData(string OperationId, UserContext? User = null);
+
+/// <summary>Application-owned working state and structured output for one durable chat turn.</summary>
+public sealed record GiftShopChatTurnState(
+    IReadOnlyList<CartSnapshot> WorkingCart,
+    IReadOnlyList<CartAction> CartActions,
+    IReadOnlyList<NavigationAction> NavigationActions)
+{
+    public static GiftShopChatTurnState Create(IEnumerable<CartSnapshot> cart) =>
+        new(cart.Select(item => item with { }).ToArray(), [], []);
+}
 
 /// <summary>Cart mutations collected by tools, applied client-side.</summary>
 public record CartAction(
@@ -24,18 +31,8 @@ public enum CartActionType { Add, Remove, Clear }
 /// <summary>Lightweight snapshot of a cart item, passed from Web to workflow/activity.</summary>
 public record CartSnapshot(int ProductId, string ProductName, decimal Price, int Quantity);
 
-/// <summary>Single entry in conversation history (for query and activity input).</summary>
+/// <summary>Visible user/final-assistant entry projected for the chat UI.</summary>
 public record ChatHistoryEntry(bool IsUser, string Text, DateTime Timestamp);
-
-/// <summary>Input for the AI inference activity.</summary>
-public record ChatInferenceInput(
-    List<ChatHistoryEntry> History,
-    string UserMessage,
-    List<CartSnapshot>? Cart = null,
-    UserContext? User = null);
-
-/// <summary>Output from the AI inference activity.</summary>
-public record ChatInferenceResult(string AssistantMessage, List<CartAction> CartActions, List<NavigationAction> NavigationActions);
 
 /// <summary>Navigation request emitted by tools, executed client-side.</summary>
 public record NavigationAction(NavigationTarget Target, string Url, string? Label = null);

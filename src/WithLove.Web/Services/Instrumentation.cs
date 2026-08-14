@@ -16,6 +16,7 @@ public class Instrumentation : IDisposable
     public Histogram<int> CartItemsAtCheckout { get; }
     public Counter<long> ChatSessionsStarted { get; }
     public Counter<long> ChatCartActions { get; }
+    public Histogram<double> ChatTurnDuration { get; }
 
     public Instrumentation()
     {
@@ -42,6 +43,11 @@ public class Instrumentation : IDisposable
         ChatCartActions = Meter.CreateCounter<long>(
             "chat.message.cart_actions",
             description: "Cart mutations triggered by the AI assistant, by action type");
+
+        ChatTurnDuration = Meter.CreateHistogram<double>(
+            "chat.turn.duration_ms",
+            unit: "ms",
+            description: "End-to-end duration of a durable chat Update");
     }
 
     public void Dispose()

@@ -1,0 +1,174 @@
+using Microsoft.Extensions.AI;
+using TemporalCommunity.Extensions.AI;
+using TemporalCommunity.Extensions.AI.Session;
+
+namespace WithLove.Workflows.Tests.Unit.Chat;
+
+public class GiftShopChatConfigurationTests
+{
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void ConfigureDurableExecution_FreezesGiftShopBoundaries()
+    {
+        var options = new DurableExecutionOptions { TaskQueue = WorkflowConstants.DefaultTaskQueue };
+
+        GiftShopChatRegistrationExtensions.ConfigureDurableExecution(options);
+
+        options.RegisterDefaultWorkflow.Should().BeFalse();
+        options.WorkflowIdPrefix.Should().Be("giftshop-chat-");
+        options.SessionTimeToLive.Should().Be(TimeSpan.FromHours(24));
+        options.ActivityTimeout.Should().Be(TimeSpan.FromMinutes(2));
+        options.HeartbeatTimeout.Should().Be(TimeSpan.FromMinutes(2));
+        options.MaxToolCallsPerTurn.Should().Be(40);
+        options.MaximumConsecutiveErrorsPerRequest.Should().Be(3);
+        options.MaxEntryCount.Should().Be(1000);
+        options.EnableSearchAttributes.Should().BeFalse();
+        options.IncludeDetailedErrors.Should().BeFalse();
+        options.RetryPolicy.Should().NotBeNull();
+        options.RetryPolicy!.InitialInterval.Should().Be(TimeSpan.FromSeconds(2));
+        options.RetryPolicy.BackoffCoefficient.Should().Be(2.0f);
+        options.RetryPolicy.MaximumInterval.Should().Be(TimeSpan.FromSeconds(30));
+        options.RetryPolicy.MaximumAttempts.Should().Be(3);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void CreateDeclarations_HasStableNamesAndDescriptions()
+    {
+        var expected = new (string Name, string Description)[]
+        {
+            ("search_products", "Search for products by name or description. Use this to find gifts matching customer needs."),
+            ("get_product_details", "Get full details for a specific product including materials, features, and story."),
+            ("get_categories", "Get all product collections (categories) available in the shop."),
+            ("browse_category", "Browse products in a specific collection (category) by ID."),
+            ("add_to_cart", "Add a product to the customer's cart. Use the exact product ID from search or browse results."),
+            ("remove_from_cart", "Remove one or more products from the cart. Use exact product IDs from view_cart."),
+            ("view_cart", "View the current contents of the customer's cart. Call this before answering questions about the cart."),
+            ("clear_cart", "Empty the entire cart. Use this when the customer wants to start fresh or remove everything."),
+            ("navigate_to_product", "Navigate the customer to a product detail page."),
+            ("navigate_to_collection", "Navigate the customer to a product collection (category) page. ALWAYS call get_categories first to find the numeric category ID — never guess it."),
+            ("navigate_to_cart", "Navigate the customer to their cart page."),
+            ("navigate_to_checkout", "Navigate the customer to the checkout page."),
+            ("view_loyalty_points", "Get the current customer's Love Tokens balance, tier, and progress toward the next tier. Use when the customer asks about their points, balance, rewards, or tier status."),
+        };
+
+        var declarations = GiftShopChatToolCatalog.CreateDeclarations();
+
+        declarations.Select(declaration => (declaration.Name, declaration.Description))
+            .Should().Equal(expected);
+        declarations.Should().OnlyContain(declaration => declaration.AdditionalProperties.Count == 0);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void BuildInstructions_AddsCustomerContextWithoutChangingToolConfiguration()
+    {
+        var instructions = GiftShopChatPrompt.BuildInstructions(
+            new UserContext("Avery", "avery@example.test", "user-7"));
+
+        instructions.Should().Contain("You are LA");
+        instructions.Should().Contain("Name: Avery");
+        instructions.Should().Contain("Email: avery@example.test");
+        instructions.Should().NotContain("user-7");
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void ProjectHistory_HidesToolProtocolAndUsesLastAssistantText()
+    {
+        var timestamp = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        var request = DurableSessionRequest.FromMessages(
+            [new ChatMessage(ChatRole.User, "Show me a gift") { CreatedAt = timestamp }],
+            "turn-1",
+            timestamp);
+        var response = DurableSessionResponse.FromChatResponse(
+            "turn-1",
+            new ChatResponse(
+            [
+                new ChatMessage(ChatRole.Assistant, "Let me look."),
+                new ChatMessage(ChatRole.Assistant,
+                [
+                    new FunctionCallContent(
+                        "call-1",
+                        "search_products",
+                        new Dictionary<string, object?> { ["query"] = "gift" }),
+                ]),
+                new ChatMessage(ChatRole.Tool,
+                [
+                    new FunctionResultContent("call-1", "internal product result"),
+                ]),
+                new ChatMessage(ChatRole.Assistant, "This keepsake would be lovely."),
+            ]),
+            timestamp);
+
+        var projected = GiftShopChatResponseProjector.ProjectHistory([request, response]);
+
+        projected.Should().Equal(
+            new ChatHistoryEntry(true, "Show me a gift", timestamp.UtcDateTime),
+            new ChatHistoryEntry(false, "This keepsake would be lovely.", timestamp.UtcDateTime));
+        projected.Should().NotContain(entry => entry.Text.Contains("internal product result"));
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void IterationLimitMessage_MatchesPackageContractForConfiguredBoundary()
+    {
+        GiftShopChatResponseProjector.IterationLimitMessage.Should().Be(
+            "Maximum tool-call iterations (40) exceeded; " +
+            "the conversation did not converge on a final answer.");
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void Validator_RejectsNullOptionsBeforeManagedTurnExecution()
+    {
+        var workflow = new GiftShopChatWorkflow();
+        var invalid = new DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>
+        {
+            Messages = [new ChatMessage(ChatRole.User, "Hello")],
+            RequestData = new GiftShopChatRequestData("null-options"),
+            InitialTurnState = GiftShopChatTurnState.Create([]),
+            CorrelationId = "null-options",
+            Options = null!,
+        };
+
+        var validate = () => workflow.ValidateSendMessage(invalid);
+
+        validate.Should().Throw<ArgumentException>()
+            .WithMessage("GiftShop tools must run sequentially.*");
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void Validator_RejectsCallerSuppliedToolsBeforeManagedTurnExecution()
+    {
+        var workflow = new GiftShopChatWorkflow();
+        var invalid = new DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>
+        {
+            Messages = [new ChatMessage(ChatRole.User, "Hello")],
+            RequestData = new GiftShopChatRequestData("caller-tools"),
+            InitialTurnState = GiftShopChatTurnState.Create([]),
+            CorrelationId = "caller-tools",
+            ChatOptions = new ChatOptions
+            {
+                Tools = [GiftShopChatToolCatalog.CreateDeclarations()[0]],
+            },
+            Options = new DurableTurnOptions
+            {
+                DispatchMode = DurableToolDispatchMode.Sequential,
+            },
+        };
+
+        var validate = () => workflow.ValidateSendMessage(invalid);
+
+        validate.Should().Throw<ArgumentException>()
+            .WithMessage("Caller-supplied tools are not supported.*");
+    }
+}

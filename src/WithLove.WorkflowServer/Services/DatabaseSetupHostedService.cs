@@ -2,6 +2,7 @@ using Temporalio.Api.Enums.V1;
 using Temporalio.Client;
 using Temporalio.Common.EnvConfig;
 using Temporalio.Exceptions;
+using TemporalCommunity.Extensions.AI;
 using WithLove.Workflows.Activities;
 using WithLove.Workflows.Workflows;
 
@@ -81,7 +82,8 @@ public partial class DatabaseSetupHostedService(ILogger<DatabaseSetupHostedServi
 
     private async Task<TemporalClient> ConnectWithRetryAsync(CancellationToken stoppingToken)
     {
-        var connectOptions = ClientEnvConfig.LoadClientConnectOptions();
+        var connectOptions = ConfigureClientConnectOptions(
+            ClientEnvConfig.LoadClientConnectOptions());
         var delay = TimeSpan.FromSeconds(2);
         const int maxAttempts = 20;
 
@@ -103,5 +105,13 @@ public partial class DatabaseSetupHostedService(ILogger<DatabaseSetupHostedServi
 
         // Unreachable: on the final attempt the unfiltered RpcException propagates before this line.
         throw new System.Diagnostics.UnreachableException("Temporal connection failed after all retries.");
+    }
+
+    internal static TemporalClientConnectOptions ConfigureClientConnectOptions(
+        TemporalClientConnectOptions connectOptions)
+    {
+        ArgumentNullException.ThrowIfNull(connectOptions);
+        connectOptions.DataConverter = DurableAIDataConverter.Instance;
+        return connectOptions;
     }
 }

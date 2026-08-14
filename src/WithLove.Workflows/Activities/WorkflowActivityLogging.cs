@@ -64,6 +64,15 @@ internal static partial class WorkflowActivityLogging
     [LoggerMessage(Level = LogLevel.Warning, Message = "Unable to load Love Tokens for user {UserId}")]
     internal static partial void UnableToLoadLoveTokens(this ILogger logger, Exception exception, string? userId);
 
+    [LoggerMessage(
+        Level = LogLevel.Information,
+        Message = "Invoking GiftShop tool {ToolName} for operation {CorrelationId} with durable idempotency key {IdempotencyKey}")]
+    internal static partial void InvokingGiftShopTool(
+        this ILogger logger,
+        string toolName,
+        string? correlationId,
+        string idempotencyKey);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Retrieving checkout session {SessionId}")]
     internal static partial void RetrievingCheckoutSession(this ILogger logger, string sessionId);
 

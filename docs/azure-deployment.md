@@ -42,6 +42,13 @@ The AppHost's Azure publish configuration swaps local development services for A
 
 workflowServer never scales to zero because it must continuously poll Temporal Cloud for tasks.
 
+The chat path uses `TemporalCommunity.Extensions.AI` 0.12.1. Web starts
+`WithLove.GiftShopChatWorkflow`; workflowServer executes each model step as
+`TemporalCommunity.Extensions.AI.GetChatStep` and each requested GiftShop tool as its own
+`TemporalCommunity.Extensions.AI.InvokeFunction` activity. The extension requires Temporal Server
+1.31.0 or newer. Confirm the target Temporal Cloud namespace supports that server level before
+deployment.
+
 The AppHost represents the existing namespace with `TemporalCommunity.Aspire.Hosting` and
 injects its connection settings into the Web and Workflow Server container apps. The Temporal
 Cloud resource is excluded from deployment manifests, so deployment does not create the
@@ -185,6 +192,14 @@ az containerapp replica list \
   --resource-group withlove-rg \
   --name workflowserver
 ```
+
+7. Start a new assistant session and ask it to add a product, then view the cart
+8. In Temporal Cloud, confirm the workflow type is `WithLove.GiftShopChatWorkflow` and its history
+   contains separate `GetChatStep` and `InvokeFunction` activities
+9. In the Aspire/Azure trace backend, confirm package spans named `chat ...` and `execute_tool ...`
+   are exported by workflowServer
+10. Refresh/reconnect the shop UI and confirm only user and final assistant text is rendered; tool
+    protocol remains internal to Temporal/model context
 
 ## Non-interactive / CI deploy
 

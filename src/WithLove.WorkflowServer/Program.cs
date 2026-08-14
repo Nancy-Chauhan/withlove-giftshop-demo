@@ -10,6 +10,7 @@ using Temporalio.Runtime;
 using WithLove.Data;
 using WithLove.WorkflowServer.Services;
 using WithLove.Workflows.Activities;
+using WithLove.Workflows.Chat;
 using WithLove.Workflows.Workflows;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,7 +20,7 @@ builder.AddServiceDefaults();
 builder.ConfigureOpenTelemetry()
     .WithTracing(tracing =>
     {
-        tracing.AddSource(Instrumentation.ActivitySourceName);
+        tracing.AddWorkflowServerTracingSources();
         tracing.AddSource(
             TracingInterceptor.ClientSource.Name,
             TracingInterceptor.WorkflowsSource.Name,
@@ -73,7 +74,7 @@ builder.Services.AddEmbeddingGenerator<string, Embedding<float>>(
 
 builder.Services.AddChatClient(
     new OpenAI.Chat.ChatClient("gpt-5-nano", openaiKey).AsIChatClient())
-    .UseFunctionInvocation();
+    .Build();
 
 builder.Services.AddHttpClient("productsApi", client =>
 {
@@ -101,7 +102,7 @@ builder.Services.AddSingleton(temporalRuntime);
 
 var connectOptions = ClientEnvConfig.LoadClientConnectOptions();
 
-builder.Services.AddHostedTemporalWorker(
+var temporalWorker = builder.Services.AddHostedTemporalWorker(
         clientTargetHost: connectOptions.TargetHost ?? "localhost:7233",
         clientNamespace: connectOptions.Namespace,
         taskQueue: "with-love-tasks")
@@ -120,13 +121,13 @@ builder.Services.AddHostedTemporalWorker(
     .AddScopedActivities<DatabaseActivities>()
     .AddScopedActivities<CustomerOnboardingActivities>()
     .AddScopedActivities<StripeCheckoutOrderActivities>()
-    .AddScopedActivities<ChatAgentActivities>()
     .AddScopedActivities<LoyaltyActivities>()
     .AddWorkflow<DatabaseSetupWorkflow>()
     .AddWorkflow<CustomerOnboardingWorkflow>()
     .AddWorkflow<StripeCheckoutOrderWorkflow>()
-    .AddWorkflow<ChatAgentWorkflow>()
     .AddWorkflow<LoyaltyAccountWorkflow>();
+
+temporalWorker.AddGiftShopChatWorker();
 
 builder.Services.AddHostedService<DatabaseSetupHostedService>();
 
@@ -141,4 +142,3 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 await app.RunAsync();
-
