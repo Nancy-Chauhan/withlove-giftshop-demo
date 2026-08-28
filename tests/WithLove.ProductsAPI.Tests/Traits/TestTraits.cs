@@ -23,7 +23,7 @@ public static class TestTraits
     /// <para>
     /// The trait name and value are a contract with <c>.github/workflows/build.yml</c>, which
     /// excludes them with <c>--filter "RequiresSecrets!=true"</c>. Renaming either side silently
-    /// re-enables 25 tests that will then fail the CI build. See the Testing section of
+    /// re-enables the secret-dependent tests, which will then fail the CI build. See the Testing section of
     /// <c>CLAUDE.md</c>.
     /// </para>
     /// </remarks>
