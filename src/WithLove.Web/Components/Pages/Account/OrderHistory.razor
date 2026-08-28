@@ -1,7 +1,8 @@
 @page "/account/orders"
 @attribute [Authorize]
-@rendermode InteractiveServer
 @using System.Security.Claims
+@using Microsoft.AspNetCore.Components
+@implements IDisposable
 
 <PageTitle>Order History | With Love</PageTitle>
 
@@ -122,7 +123,9 @@
     [Inject] private ICartService CartService { get; set; } = default!;
     [Inject] private IProductService ProductService { get; set; } = default!;
     [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Inject] private PersistentComponentState PersistentState { get; set; } = default!;
 
+    private const string PrerenderedStateKey = "OrderHistory.InitialState";
     private List<OrderSummaryView> _orders = [];
     private string? _nextCursor;
     private bool _hasMore;
@@ -133,11 +136,23 @@
     private string? _reorderWarning;
     private bool _reorderError;
     private string? _userId;
+    private PersistingComponentStateSubscription? _persistingSubscription;
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthStateProvider.GetAuthenticationStateAsync();
         _userId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+
+        if (PersistentState.TryTakeFromJson<OrderHistoryRenderState>(PrerenderedStateKey, out var state) && state is not null)
+        {
+            _orders = state.Orders;
+            _hasMore = state.HasMore;
+            _nextCursor = state.NextCursor;
+            _loadError = state.LoadError;
+            _loading = false;
+            return;
+        }
+
         try
         {
             var page = await OrderService.GetOrdersAsync(_userId);
@@ -146,8 +161,22 @@
             _nextCursor = page.NextCursor;
         }
         catch { _loadError = true; }
-        finally { _loading = false; }
+        finally
+        {
+            _loading = false;
+            _persistingSubscription = PersistentState.RegisterOnPersisting(PersistStateAsync);
+        }
     }
+
+    private Task PersistStateAsync()
+    {
+        PersistentState.PersistAsJson(
+            PrerenderedStateKey,
+            new OrderHistoryRenderState([.. _orders], _hasMore, _nextCursor, _loadError));
+        return Task.CompletedTask;
+    }
+
+    public void Dispose() => _persistingSubscription?.Dispose();
 
     private async Task LoadMoreAsync()
     {

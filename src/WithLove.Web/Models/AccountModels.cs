@@ -64,6 +64,20 @@ public record OrdersPage(
     /// </summary>
     string? NextCursor);
 
+/// <summary>
+/// The initial Order History view state carried from the prerendered response
+/// into its interactive server render.
+/// </summary>
+/// <remarks>
+/// This avoids a second order query and loading layout after the Blazor circuit
+/// attaches to the prerendered page.
+/// </remarks>
+public sealed record OrderHistoryRenderState(
+    List<OrderSummaryView> Orders,
+    bool HasMore,
+    string? NextCursor,
+    bool LoadError);
+
 /// <summary>Saved shipping or billing address for a user's account.</summary>
 public record SavedAddress(
     string Label, string TypeBadge, string BadgeStyle,
