@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text.Json;
 using Temporalio.Activities;
+using Temporalio.Exceptions;
 using WithLove.Workflows.Chat;
 using WithLove.Workflows.Loyalty;
 using WithLove.Workflows.Workflows;
@@ -17,8 +19,8 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
             $"/api/products/search?q={Uri.EscapeDataString(query)}&top=10",
             cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            return "Sorry, I couldn't search for products right now.";
+        if (IsResourceMissing(response, "search_products"))
+            return "No products found.";
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return SummarizeProductList(json);
@@ -29,8 +31,8 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         var http = httpClientFactory.CreateClient("productsApi");
         var response = await http.GetAsync($"/api/products/{productId}", cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            return $"Sorry, I couldn't find product {productId}.";
+        if (IsResourceMissing(response, "get_product_details"))
+            return $"There is no product with ID {productId}. Verify the ID from search results.";
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return SummarizeProduct(json);
@@ -41,8 +43,8 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         var http = httpClientFactory.CreateClient("productsApi");
         var response = await http.GetAsync("/api/categories", cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            return "Sorry, I couldn't load collections right now.";
+        if (IsResourceMissing(response, "get_categories"))
+            return "No collections found.";
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return SummarizeCategoryList(json);
@@ -53,8 +55,8 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         var http = httpClientFactory.CreateClient("productsApi");
         var response = await http.GetAsync($"/api/products/category/{categoryId}", cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
-            return "Sorry, I couldn't load that collection right now.";
+        if (IsResourceMissing(response, "browse_category"))
+            return $"There is no collection with ID {categoryId}. Call get_categories for valid IDs.";
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         return SummarizeProductList(json);
@@ -68,11 +70,11 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         var http = httpClientFactory.CreateClient("productsApi");
         var response = await http.GetAsync($"/api/products/{productId}", cancellationToken);
 
-        if (!response.IsSuccessStatusCode)
+        if (IsResourceMissing(response, "add_to_cart"))
         {
             return new AddToCartToolResult(
-                $"Sorry, I couldn't find product {productId} to add to your cart. " +
-                "Please verify the product ID from search results.",
+                $"There is no product with ID {productId}, so nothing was added to the cart. " +
+                "Verify the product ID from search results.",
                 null);
         }
 
@@ -127,17 +129,78 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
                    $"{nextTierMessage} (Lifetime earned: {profile.LifetimeEarned} pts. " +
                    "Redeem at checkout: 100 pts = $1 off.)";
         }
-        catch (Temporalio.Exceptions.RpcException exception)
-            when (exception.Code == Temporalio.Exceptions.RpcException.StatusCode.NotFound)
+        catch (RpcException exception) when (exception.Code == RpcException.StatusCode.NotFound)
         {
+            // A missing loyalty workflow is an answer, not a fault: this customer has simply never
+            // earned tokens. Retrying would return NotFound forever, so report it to the model.
             return "You don't have any Love Tokens yet. Complete a purchase to start earning — " +
                    "1 token per $1 spent!";
         }
         catch (Exception exception)
         {
+            // Everything else is infrastructure. Log for operators, then rethrow so the activity
+            // fails and Temporal's retry policy actually runs. Swallowing this and returning
+            // "please try again in a moment" completed the activity successfully — Temporal saw a
+            // healthy workflow, no retry ever fired, and the model relayed advice to the customer
+            // that could never work.
             logger.UnableToLoadLoveTokens(exception, userId);
-            return "I couldn't load your Love Tokens balance right now. Please try again in a moment.";
+            throw;
         }
+    }
+
+    /// <summary>
+    /// Separates "this resource does not exist" from "this call failed", and refuses to let the
+    /// second masquerade as the first.
+    /// </summary>
+    /// <param name="response">The ProductsAPI response to classify.</param>
+    /// <param name="toolName">Tool name, used to make the failure legible in Temporal history.</param>
+    /// <returns>
+    /// <see langword="false"/> when the body can be read; <see langword="true"/> when the resource
+    /// genuinely does not exist and the caller should return a graceful message to the model.
+    /// </returns>
+    /// <exception cref="ApplicationFailureException">
+    /// Thrown for every other non-success status — see the remarks for why.
+    /// </exception>
+    /// <remarks>
+    /// A durable tool that catches an infrastructure failure and returns apologetic prose
+    /// <i>completes successfully</i>. Temporal records a healthy activity, the retry policy never
+    /// fires, and the model is handed an outcome it cannot distinguish from a real answer. So only
+    /// outcomes the model can genuinely act on are allowed to become strings:
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>404</b> — a real answer. The product or collection does not exist and never will; a retry
+    /// returns the same 404. Handled conversationally by the caller.
+    /// </description></item>
+    /// <item><description>
+    /// <b>5xx, 408, 429</b> — transient infrastructure failure. Thrown as retryable so Temporal
+    /// re-runs the activity, which is the whole reason each tool call is its own activity.
+    /// </description></item>
+    /// <item><description>
+    /// <b>Other 4xx</b> — the request itself is wrong (bad parameters, missing API version header).
+    /// Thrown as non-retryable: three identical attempts would fail three identical ways, so fail
+    /// fast rather than burning the retry budget.
+    /// </description></item>
+    /// </list>
+    /// Network-level faults already throw out of <c>HttpClient</c> and are deliberately left to
+    /// propagate for exactly the same reason.
+    /// </remarks>
+    private static bool IsResourceMissing(HttpResponseMessage response, string toolName)
+    {
+        if (response.IsSuccessStatusCode)
+            return false;
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return true;
+
+        var transient =
+            (response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
+            || (int)response.StatusCode >= 500;
+
+        throw new ApplicationFailureException(
+            $"Durable tool '{toolName}' could not reach ProductsAPI: " +
+            $"HTTP {(int)response.StatusCode} {response.StatusCode}.",
+            errorType: "ProductsApiRequestFailed",
+            nonRetryable: !transient);
     }
 
     private static string NextTierName(LoyaltyTier tier) => tier switch

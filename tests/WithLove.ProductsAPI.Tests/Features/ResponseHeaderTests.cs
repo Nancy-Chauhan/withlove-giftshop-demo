@@ -1,6 +1,8 @@
 namespace WithLove.ProductsAPI.Tests.Features;
 
 [Collection("Integration")]
+// Boots the Aspire AppHost, which needs Parameters:openai-api-key. Excluded from CI.
+[Trait(TestTraits.RequiresSecrets, TestTraits.True)]
 public class ResponseHeaderTests
 {
     private readonly IntegrationTestFixture _fixture;

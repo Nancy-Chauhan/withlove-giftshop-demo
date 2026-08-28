@@ -49,10 +49,28 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
     public string TaskQueue { get; }
     public DurableChatWorkflowInput WorkflowInput { get; }
 
+    /// <summary>Starts a worker hosting the gift shop chat workflow and its durable tools.</summary>
+    /// <param name="environment">The Temporal test environment to connect the worker to.</param>
+    /// <param name="chatClient">Scripted model responses for the turn under test.</param>
+    /// <param name="transformInput">
+    /// Adjusts the workflow input before the workflow is started — used to shorten retry intervals
+    /// so a test that deliberately provokes retries does not spend the production backoff waiting.
+    /// </param>
+    /// <param name="productsHandler">
+    /// Transport for the <c>productsApi</c> named client. Defaults to
+    /// <see cref="GiftShopProductsHandler"/>, which always succeeds.
+    /// <para>
+    /// This parameter is the failure-injection seam. Without it, every durable tool test could only
+    /// exercise the happy path plus the incidental 404 the default handler returns for unknown
+    /// paths, so the classification in <c>GiftShopChatToolService.IsResourceMissing</c> — which
+    /// decides whether Temporal retries at all — had no test that could reach it.
+    /// </para>
+    /// </param>
     public static async Task<GiftShopChatWorkerHarness> StartAsync(
         WorkflowEnvironment environment,
         ScriptedGiftShopChatClient chatClient,
-        Func<DurableChatWorkflowInput, DurableChatWorkflowInput>? transformInput = null)
+        Func<DurableChatWorkflowInput, DurableChatWorkflowInput>? transformInput = null,
+        HttpMessageHandler? productsHandler = null)
     {
         var targetHost = environment.Client.Connection.Options.TargetHost
             ?? throw new InvalidOperationException("Temporal target host is unavailable.");
@@ -64,7 +82,8 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
             new NoopEmbeddingGenerator());
         builder.Services.AddHttpClient("productsApi", client =>
                 client.BaseAddress = new Uri("http://products.test"))
-            .ConfigurePrimaryHttpMessageHandler(() => new GiftShopProductsHandler());
+            .ConfigurePrimaryHttpMessageHandler(
+                () => productsHandler ?? new GiftShopProductsHandler());
 
         var worker = builder.Services
             .AddHostedTemporalWorker(
@@ -162,6 +181,52 @@ internal sealed class NoopEmbeddingGenerator : IEmbeddingGenerator<string, Embed
 
     public void Dispose()
     {
+    }
+}
+
+/// <summary>
+/// A ProductsAPI transport that returns whatever the test tells it to, and counts attempts.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The attempt count is the point. Asserting that a durable tool <i>threw</i> only proves the tool
+/// refused to answer; it does not prove Temporal treated the failure as retryable. Those are
+/// different outcomes with the same observable exception, and a non-retryable classification is
+/// exactly the regression that would go unnoticed. Counting the HTTP attempts the worker actually
+/// made — alongside <c>ActivityTaskFailed</c> in workflow history — distinguishes them.
+/// </para>
+/// <para>
+/// Deliberately not disposable-sensitive: <see cref="IHttpClientFactory"/> owns the primary handler
+/// and may dispose it while the test still holds the reference to read
+/// <see cref="AttemptCount"/>. <see cref="HttpMessageHandler.Dispose(bool)"/> is a no-op here, so
+/// the counter outlives the pipeline.
+/// </para>
+/// </remarks>
+internal sealed class ScriptedProductsHandler(
+    Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+{
+    private int _attemptCount;
+
+    /// <summary>Number of requests that reached this transport across all retries.</summary>
+    public int AttemptCount => Volatile.Read(ref _attemptCount);
+
+    /// <summary>Paths requested, in order, so a test can confirm which tool was exercised.</summary>
+    public ConcurrentQueue<string> Paths { get; } = new();
+
+    /// <summary>Always answers with <paramref name="status"/> and an empty JSON body.</summary>
+    public static ScriptedProductsHandler AlwaysReturns(HttpStatusCode status) =>
+        new(_ => new HttpResponseMessage(status)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+        Paths.Enqueue(request.RequestUri?.PathAndQuery ?? string.Empty);
+        return Task.FromResult(respond(request));
     }
 }
 

@@ -17,6 +17,9 @@ public class Instrumentation : IDisposable
     public Counter<long> ChatSessionsStarted { get; }
     public Counter<long> ChatCartActions { get; }
     public Histogram<double> ChatTurnDuration { get; }
+    public Counter<long> ChatTokensUsed { get; }
+    public Histogram<long> ChatTurnTokens { get; }
+    public Counter<long> ChatTurnsWithoutUsage { get; }
 
     public Instrumentation()
     {
@@ -48,6 +51,31 @@ public class Instrumentation : IDisposable
             "chat.turn.duration_ms",
             unit: "ms",
             description: "End-to-end duration of a durable chat Update");
+
+        // Token spend is the only cost in this application that scales with model behaviour rather
+        // than with traffic, and a single turn can make up to 40 model calls under the workflow's
+        // tool-iteration cap. The durable AI package already tags raw counts onto each gen_ai span,
+        // but spans are sampled and are the wrong shape for a budget alarm — these instruments are
+        // the aggregate view: a monotonic counter to bill against and a distribution to alert on.
+        ChatTokensUsed = Meter.CreateCounter<long>(
+            "chat.turn.tokens",
+            unit: "{token}",
+            description: "Model tokens billed by durable chat turns, by token type "
+                         + "(input/output) and turn completion reason");
+
+        ChatTurnTokens = Meter.CreateHistogram<long>(
+            "chat.turn.token_usage",
+            unit: "{token}",
+            description: "Total tokens consumed by a single durable chat turn — the per-turn "
+                         + "distribution a token budget is set against");
+
+        // A turn that fails mid-loop has already burned tokens that never reach the counters above,
+        // so cost tracking that silently under-reports is worse than none. This counter makes the
+        // blind spot measurable: compare it against chat.turn.duration_ms to size the gap.
+        ChatTurnsWithoutUsage = Meter.CreateCounter<long>(
+            "chat.turn.usage_unreported",
+            description: "Durable chat turns that returned no token usage, by completion reason — "
+                         + "tokens these turns spent are absent from chat.turn.tokens");
     }
 
     public void Dispose()

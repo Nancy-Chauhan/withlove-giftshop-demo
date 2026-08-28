@@ -9,6 +9,16 @@ namespace WithLove.Workflows.Workflows;
 public sealed class GiftShopChatWorkflow
     : DurableToolWorkflowBase<GiftShopChatRequestData, GiftShopChatTurnState>
 {
+    /// <summary>
+    /// Prefix every chat session workflow ID carries. An authenticated session is
+    /// <c>giftshop-chat-{userId}</c>; an anonymous session is <c>giftshop-chat-anon-{guid}</c>.
+    /// The ID is therefore the authoritative record of who owns the session.
+    /// </summary>
+    public const string WorkflowIdPrefix = "giftshop-chat-";
+
+    /// <summary>Builds the session workflow ID that belongs to <paramref name="userId"/>.</summary>
+    public static string WorkflowIdFor(string userId) => WorkflowIdPrefix + userId;
+
     [WorkflowRun]
     public new Task RunAsync(DurableChatWorkflowInput input) => base.RunAsync(input);
 
@@ -70,6 +80,23 @@ public sealed class GiftShopChatWorkflow
         }
         if (request.ChatOptions?.Tools is not null)
             throw new ArgumentException("Caller-supplied tools are not supported.", nameof(request));
+
+        // Defence in depth on session ownership. UserId is populated server-side from
+        // ClaimTypes.NameIdentifier and is not reachable from the model, but the workflow ID is
+        // the only durable statement of who owns this session and the workflow is the only place
+        // that can check the pairing. Doing it in the validator rather than the update handler
+        // means a mismatched request is rejected without being written to history at all.
+        // Anonymous sessions carry no UserId and are keyed by an unguessable GUID instead.
+        if (request.RequestData.User?.UserId is { Length: > 0 } userId
+            && !string.Equals(
+                Workflow.Info.WorkflowId,
+                WorkflowIdFor(userId),
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "The request user does not own this chat session.",
+                nameof(request));
+        }
     }
 
     [WorkflowUpdate("SendMessage")]

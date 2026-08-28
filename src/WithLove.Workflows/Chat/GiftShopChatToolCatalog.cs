@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,27 @@ namespace WithLove.Workflows.Chat;
 
 public static class GiftShopChatToolCatalog
 {
+    /// <summary>Smallest quantity a single <c>add_to_cart</c> call may contribute.</summary>
+    public const int MinAddToCartQuantity = 1;
+
+    /// <summary>
+    /// Largest quantity a single <c>add_to_cart</c> call may contribute.
+    /// <para>
+    /// The model can emit any <see cref="int"/> it likes, so this bound is enforced twice on
+    /// purpose. The <see cref="RangeAttribute"/> on the parameter publishes it into the tool's
+    /// JSON schema so the model is told the rule, and <see cref="Math.Clamp(int, int, int)"/>
+    /// inside the implementation enforces it because a schema is advice, not a gate — nothing
+    /// in Microsoft.Extensions.AI validates DataAnnotations at invocation time.
+    /// </para>
+    /// <para>
+    /// The attribute must appear on the declaration <em>and</em> the worker implementation.
+    /// Durable tools are fingerprinted on Name + JsonSchema + ReturnJsonSchema, and
+    /// <c>[Range]</c> emits <c>minimum</c>/<c>maximum</c> into that schema, so changing one side
+    /// alone produces a non-retryable "does not match frozen declaration" failure at run time.
+    /// </para>
+    /// </summary>
+    public const int MaxAddToCartQuantity = 99;
+
     public static IReadOnlyList<AIFunctionDeclaration> CreateDeclarations() =>
     [
         Declaration(SearchProductsDeclarationAsync, "search_products",
@@ -125,7 +147,8 @@ public static class GiftShopChatToolCatalog
 
     private static Task<string> AddToCartDeclarationAsync(
         [Description("The exact product ID from search or browse results")] int productId,
-        [Description("Quantity to add (default 1)")] int quantity = 1,
+        [Range(MinAddToCartQuantity, MaxAddToCartQuantity)]
+        [Description("Quantity to add, from 1 to 99 (default 1)")] int quantity = 1,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(string.Empty);
 
@@ -182,9 +205,15 @@ public static class GiftShopChatToolCatalog
 
         public async Task<string> AddToCartAsync(
             [Description("The exact product ID from search or browse results")] int productId,
-            [Description("Quantity to add (default 1)")] int quantity = 1,
+            [Range(MinAddToCartQuantity, MaxAddToCartQuantity)]
+            [Description("Quantity to add, from 1 to 99 (default 1)")] int quantity = 1,
             CancellationToken cancellationToken = default)
         {
+            // Clamp before the value reaches turn state. A model-supplied int is untrusted input:
+            // negatives produce a negative subtotal and large values overflow the cart's running
+            // total. See MaxAddToCartQuantity for why the [Range] attribute alone is not enough.
+            quantity = Math.Clamp(quantity, MinAddToCartQuantity, MaxAddToCartQuantity);
+
             var result = await service.BuildAddToCartAsync(productId, quantity, cancellationToken);
             if (result.Action is not { } action)
                 return result.Message;

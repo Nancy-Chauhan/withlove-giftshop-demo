@@ -17,7 +17,7 @@ public class FusionCacheCartService : ICartService
     public event Action? OnChange;
 
     public IReadOnlyList<CartItem> Items => _items.AsReadOnly();
-    public int ItemCount => _items.Sum(i => i.Quantity);
+    public int ItemCount => CartQuantity.TotalItems(_items);
     public decimal Subtotal => _items.Sum(i => i.Price * i.Quantity);
     public decimal EnhancementsTotal => _enhancements.Sum(e => e.Price);
     public decimal Total => Subtotal + EnhancementsTotal;
@@ -45,7 +45,9 @@ public class FusionCacheCartService : ICartService
         try
         {
             var state = await _cache.GetOrDefaultAsync<CartState>(_cacheKey);
-            _items = state?.Items ?? [];
+            // Persisted state has a 30-day TTL, so it may have been written by an earlier build
+            // without quantity bounds. Normalize on load rather than trusting the cache.
+            _items = CartQuantity.Sanitize(state?.Items);
             _enhancements = state?.Enhancements ?? [];
 
             if (!string.IsNullOrEmpty(anonymousCartId) && anonymousCartId != userId)
@@ -56,11 +58,17 @@ public class FusionCacheCartService : ICartService
                 {
                     foreach (var anonItem in anonState.Items)
                     {
+                        var quantity = CartQuantity.Clamp(anonItem.Quantity);
                         var existing = _items.FirstOrDefault(i => i.ProductId == anonItem.ProductId);
                         if (existing is not null)
-                            existing.Quantity += anonItem.Quantity;
+                        {
+                            existing.Quantity = CartQuantity.ClampedSum(existing.Quantity, quantity);
+                        }
                         else
+                        {
+                            anonItem.Quantity = quantity;
                             _items.Add(anonItem);
+                        }
                     }
                     foreach (var anonEnh in anonState.Enhancements)
                     {
@@ -83,19 +91,27 @@ public class FusionCacheCartService : ICartService
         OnChange?.Invoke();
     }
 
-    /// <summary>Adds an item, merging quantity when the product already exists.</summary>
+    /// <summary>
+    /// Adds an item, merging quantity when the product already exists.
+    /// </summary>
+    /// <remarks>
+    /// The quantity is clamped on entry and the merge saturates. Callers include the chat
+    /// assistant, so <c>item.Quantity</c> can originate from a language model.
+    /// </remarks>
     public async Task AddItemAsync(CartItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
         _instrumentation.CartOperations.Add(1, new KeyValuePair<string, object?>("operation", "add"));
 
+        var quantity = CartQuantity.Clamp(item.Quantity);
         var existing = _items.FirstOrDefault(i => i.ProductId == item.ProductId);
         if (existing is not null)
         {
-            existing.Quantity += item.Quantity;
+            existing.Quantity = CartQuantity.ClampedSum(existing.Quantity, quantity);
         }
         else
         {
+            item.Quantity = quantity;
             _items.Add(item);
         }
 
@@ -112,7 +128,10 @@ public class FusionCacheCartService : ICartService
         await PersistAsync();
     }
 
-    /// <summary>Updates quantity, removing the item when quantity is zero.</summary>
+    /// <summary>
+    /// Updates quantity, removing the item when quantity drops to zero or below and capping it at
+    /// <see cref="CartQuantity.Max"/> otherwise.
+    /// </summary>
     public async Task UpdateQuantityAsync(int productId, int quantity)
     {
         _instrumentation.CartOperations.Add(1, new KeyValuePair<string, object?>("operation", "update_quantity"));
@@ -125,7 +144,7 @@ public class FusionCacheCartService : ICartService
             }
             else
             {
-                item.Quantity = quantity;
+                item.Quantity = CartQuantity.Clamp(quantity);
             }
         }
 

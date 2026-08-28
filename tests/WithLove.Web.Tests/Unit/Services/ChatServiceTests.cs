@@ -340,6 +340,72 @@ public class ChatServiceTests : IDisposable
 
     public void Dispose() => _instrumentation.Dispose();
 
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_BoundsTheOutputBudgetAndLeavesSamplingUnset()
+    {
+        var service = CreateService();
+        await service.InitializeAsync();
+        ChatOptions? capturedOptions = null;
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Invokes((string _, string _,
+                DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState> request) =>
+                capturedOptions = request.ChatOptions)
+            .Returns(FinalResult("Done.", GiftShopChatTurnState.Create([])));
+
+        await service.SendMessageAsync("Hello");
+
+        capturedOptions.Should().NotBeNull();
+
+        // An unbounded step does not cost one runaway generation. A single turn runs up to the
+        // workflow's 40-iteration tool cap, and Temporal retries each step three times, so the
+        // worst case is 120 unbounded generations for one customer message.
+        capturedOptions!.MaxOutputTokens.Should().Be(2000);
+
+        // gpt-5-nano is a reasoning model: sampling parameters are rejected or ignored, so pinning
+        // Temperature would advertise control the deployment does not actually have.
+        capturedOptions.Temperature.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_WhenTheTurnFails_PropagatesAndStopsThinking()
+    {
+        var service = CreateService();
+        await service.InitializeAsync();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Throws(new InvalidOperationException("Workflow update failed"));
+        service.IsThinking = true;
+
+        var send = () => service.SendMessageAsync("Hello");
+
+        // ChatService deliberately does not swallow this. There is no ErrorBoundary above ChatFab,
+        // so its catch block is the only thing between a failed durable turn and a torn-down
+        // circuit — this test is what makes that catch load-bearing rather than defensive noise.
+        await send.Should().ThrowAsync<InvalidOperationException>();
+
+        // The finally block still runs, so the thinking indicator does not stick on the failure
+        // path. ChatFab clears it a second time because this only happens once the try is entered.
+        service.IsThinking.Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void AssistantFallback_IsCustomerSafeProse() =>
+        // Rendered verbatim to the customer by ChatFab's catch block, so it must never grow an
+        // exception message, a workflow ID or a stack frame.
+        GiftShopChatResponseProjector.AssistantFallback.Should().Be(
+            "Hmm, something went sideways on my end. Mind trying that again?");
+
     private ChatService CreateService() =>
         new(_workflowClient, _authentication, _cart, _instrumentation);
 

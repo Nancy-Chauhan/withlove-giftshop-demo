@@ -1,7 +1,18 @@
 namespace WithLove.Workflows.Chat;
 
 /// <summary>Trusted Web-created user context used for prompt personalization and tool reads.</summary>
-public record UserContext(string? Name, string? Email, string? UserId = null);
+/// <remarks>
+/// Keep this record as small as it can possibly be. It rides along on the Update payload and is
+/// re-serialized into Temporal workflow history on every model step and every tool invocation — a
+/// single turn can persist it dozens of times. Workflow history is append-only, so anything added
+/// here is effectively undeletable for the life of the retention period.
+/// <para>
+/// Customer email was deliberately removed: its only reader was the system prompt, and personal
+/// data that exists purely to be interpolated into a prompt does not belong in durable history.
+/// Add a field here only when a server-side consumer genuinely needs it.
+/// </para>
+/// </remarks>
+public record UserContext(string? Name, string? UserId = null);
 
 /// <summary>Application data available to durable tool activities for one chat turn.</summary>
 public sealed record GiftShopChatRequestData(string OperationId, UserContext? User = null);

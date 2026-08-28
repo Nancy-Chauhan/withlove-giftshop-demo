@@ -6,7 +6,9 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Microsoft.EntityFrameworkCore;
 using StackExchange.Redis;
+using Temporalio.Client;
 using Temporalio.Common.EnvConfig;
+using Temporalio.Converters;
 using Temporalio.Extensions.OpenTelemetry;
 using WithLove.Data;
 using WithLove.Data.Models;
@@ -16,6 +18,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Stripe.Extensions.AspNetCore;
 using WithLove.Web;
 using WithLove.Web.Components;
+using TemporalCommunity.Extensions.AI;
 using WithLove.Workflows.Chat;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
@@ -188,6 +191,22 @@ builder.Services.AddTemporalClient(opts =>
         opts.Tls = connectOptions.Tls; // TlsOptions; null is fine — SDK auto-enables TLS when ApiKey is set
     }
 });
+
+// The Temporal client is shared: the durable chat workflow, TemporalLoyaltyService and the Stripe
+// checkout workflow all use it, so one data converter has to serve all of them. Declare that
+// dependency here instead of inheriting it from AddGiftShopChatWorkflowClient() below.
+//
+// AddGiftShopChatWorkflowClient() installs DurableAIDataConverterPlugin, which applies
+// DurableAIDataConverter only while the converter is still DataConverter.Default; otherwise it
+// logs and skips. The skip is silent, and its blast radius is asymmetric: arguments sent to the
+// worker survive (DurableAI reads JSON case-insensitively) but results read back — LoyaltyProfile,
+// ReservationResult, CheckoutSessionInfo — bind to default values with no exception. A converter
+// mismatch must be a startup failure, not a field that quietly reads 0.
+//
+// PostConfigure so this runs after every Configure delegate, including any added by a plugin.
+builder.Services.PostConfigure<TemporalClientConnectOptions>(opts =>
+    opts.DataConverter = DurableAIConverterSetup.Resolve(opts.DataConverter));
+
 builder.Services.AddGiftShopChatWorkflowClient();
 
 var app = builder.Build();
@@ -239,3 +258,69 @@ app.MapPost("/logout", async (SignInManager<ShopUser> signInManager) =>
 app.MapHealthCheckEndpoints();
 
 app.Run();
+
+/// <summary>
+/// Reconciles the Temporal client's data converter with the MEAI-aware converter that the durable
+/// chat workflow requires.
+/// </summary>
+/// <remarks>
+/// The rule this encodes: adopting <c>DurableAIDataConverter</c> may replace the payload converter,
+/// but it must never discard a <c>PayloadCodec</c> (encryption or compression) or overwrite a
+/// converter the application chose deliberately. Assigning <c>DurableAIDataConverter.Instance</c>
+/// unconditionally would drop a codec exactly as silently as the plugin drops the AI converter, so
+/// an unreconcilable configuration fails loudly instead.
+/// </remarks>
+internal static class DurableAIConverterSetup
+{
+    /// <summary>
+    /// Returns the converter the client should use, or throws when the configured converter cannot
+    /// be reconciled with <c>DurableAIDataConverter</c>.
+    /// </summary>
+    /// <remarks>
+    /// Comparisons here are deliberately <see cref="object.ReferenceEquals(object, object)"/> and
+    /// not <c>GetType()</c>. <c>DurableAIDataConverter</c> reuses Temporal's
+    /// <c>DefaultPayloadConverter</c> and only swaps its <c>JsonSerializerOptions</c>, so the stock
+    /// converter and the AI converter are the same CLR type; a type comparison reports every stock
+    /// client as "already AI-aware" and reintroduces the silent skip this method exists to prevent.
+    /// <c>DataConverter.Default</c> and <c>DurableAIDataConverter.Instance</c> are both stable
+    /// singletons, so identity is a sound test.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The configured converter uses a custom payload or failure converter, which would lose MEAI
+    /// polymorphic content if kept and would lose the caller's intent if replaced.
+    /// </exception>
+    public static DataConverter Resolve(DataConverter configured)
+    {
+        ArgumentNullException.ThrowIfNull(configured);
+
+        var durableAI = DurableAIDataConverter.Instance;
+
+        // Already MEAI-aware, whether set here or upstream. Leave it — including its codec — alone.
+        if (ReferenceEquals(configured.PayloadConverter, durableAI.PayloadConverter))
+            return configured;
+
+        var isStockConverter =
+            ReferenceEquals(configured.PayloadConverter, DataConverter.Default.PayloadConverter)
+            && ReferenceEquals(configured.FailureConverter, DataConverter.Default.FailureConverter);
+
+        if (!isStockConverter)
+        {
+            throw new InvalidOperationException(
+                "The Temporal client is configured with a custom payload or failure converter "
+                + $"(payload: '{configured.PayloadConverter.GetType().FullName}', failure: "
+                + $"'{configured.FailureConverter.GetType().FullName}') that cannot be reconciled "
+                + "with DurableAIDataConverter. The chat workflow sends polymorphic "
+                + "Microsoft.Extensions.AI content that the stock payload converter silently "
+                + "degrades, and this client is shared with the loyalty and checkout workflows. "
+                + "Build your converter on top of DurableAIDataConverter.Instance — for example "
+                + "'DurableAIDataConverter.Instance with { PayloadCodec = yourCodec }' — rather "
+                + "than replacing it.");
+        }
+
+        // Stock converter: adopt the MEAI-aware one, carrying over any codec so swapping the
+        // payload converter cannot disable encryption or compression by accident.
+        return configured.PayloadCodec is null
+            ? durableAI
+            : durableAI with { PayloadCodec = configured.PayloadCodec };
+    }
+}

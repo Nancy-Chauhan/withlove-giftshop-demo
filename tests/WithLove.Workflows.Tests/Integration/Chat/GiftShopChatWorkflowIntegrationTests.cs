@@ -295,14 +295,15 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             (LoyaltyAccountWorkflow workflow) => workflow.RunAsync(loyaltyState),
             new WorkflowOptions($"loyalty-{userId}", harness.TaskQueue));
         (await loyalty.QueryAsync(workflow => workflow.GetBalance())).Should().Be(650);
-        var workflowId = $"giftshop-chat-loyalty-{Guid.NewGuid():N}";
+        // The workflow ID must be the one this user owns; ValidateSendMessage asserts the pairing.
+        var workflowId = GiftShopChatWorkflow.WorkflowIdFor(userId);
         var handle = await StartWorkflowAsync(harness, workflowId);
 
         var result = await handle.ExecuteUpdateAsync(
             workflow => workflow.SendMessageAsync(CreateRequest(
                 "loyalty-turn",
                 "How many Love Tokens do I have?",
-                new UserContext("Riley", "riley@example.test", userId))),
+                new UserContext("Riley", userId))),
             new WorkflowUpdateOptions { Id = "loyalty-turn" });
 
         result.CompletionReason.Should().Be(DurableTurnCompletionReason.FinalResponse);

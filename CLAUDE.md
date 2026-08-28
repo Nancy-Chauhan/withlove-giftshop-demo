@@ -48,7 +48,7 @@ dotnet build WithLoveShop.slnx
 dotnet run --project src/WithLove.AppHost
 
 # Run individual projects
-dotnet run --project src/WithLove.Web/WithLove.Web
+dotnet run --project src/WithLove.Web
 dotnet run --project src/WithLove.WorkflowServer
 
 # Build a single project
@@ -57,22 +57,80 @@ dotnet build src/WithLove.WorkflowServer
 
 ## Testing
 
-Unit and integration tests (109+ tests) cover:
-- **ETag Generation & Validation** — ETag generation from row versions, verification with If-None-Match conditional requests
-- **Problem Details Responses** — RFC 9457 compliant error responses with proper status codes and type URIs
-- **API Version Validation** — X-WITHLOVE-API-VERSION header format validation (YYYY-MM-DD)
-- **Error Handling Middleware** — Exception handling with development vs. production error detail control
-- **Response Headers Middleware** — Cache-Control and security header injection
-- **Product Caching Service** — Product retrieval, search with tag-based cache invalidation, category filtering, pagination
-- **Database Operations** — Product soft delete pattern, optimistic concurrency control with row versions
-- **Search & Filtering** — Case-insensitive product search, category-based filtering with enabled product filtering
+**463 tests. 442 run in CI. 21 run locally only.**
 
-Test organization:
+| Project | Tests |
+|---|---|
+| `WithLove.ProductsAPI.Tests` | 148 |
+| `WithLove.Web.Tests` | 198 |
+| `WithLove.Workflows.Tests` | 117 |
+
+Stack: xUnit + FakeItEasy + FluentAssertions. Prefer a real in-memory `ProductsDbContext` or a real
+`FusionCache` instance over a mock — the cache and EF query layers are self-contained, and faking
+them tests the fake.
+
+### The 21 tests CI cannot run
+
+Six ProductsAPI suites boot the Aspire AppHost. ProductsAPI's startup constructs
+`new EmbeddingClient("text-embedding-3-small", openaiKey)` eagerly, and that throws on the
+empty-string fallback — so without a real key the host never becomes ready and every test in those
+classes fails at fixture initialization rather than on an assertion. They are marked
+`[Trait(TestTraits.RequiresSecrets, TestTraits.True)]` at class level:
+
+`DatabaseVerificationTests` (6) · `HealthCheckTests` (3) · `PaginationTests` (4) ·
+`ResponseHeaderTests` (4) · `SearchTests` (4)
+
+To run them, set the key once (see the Configuration section) and run the ProductsAPI project on its
+own:
+
+```bash
+aspire secret set "Parameters:openai-api-key" "<your-key>"
+dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj
+```
+
+**A full 463-green run is achievable only on a developer machine with that key set. CI cannot make
+that claim and should not be described as if it does** — `.github/workflows/build.yml` excludes the
+trait with `--filter "...&RequiresSecrets!=true"` and reports the excluded count in the job summary.
+The trait name is a literal contract between `TestTraits.cs` and that workflow; renaming either side
+silently re-enables 21 tests that will then fail the build.
+
+Note that `SearchCacheInvalidationTests` is **not** in this set despite living under `Integration/`.
+It fakes the embedding generator and never starts the AppHost, so it runs in CI in ~250 ms.
+
+### Run tests project by project, not solution-wide
+
+`dotnet test WithLoveShop.slnx` runs the three test projects in parallel. The AppHost suite, the
+Temporal dev server and the SQL Server container then compete for the same machine, and the AppHost
+fixture times out — a red run that says nothing about the code. Run one project at a time:
+
+```bash
+dotnet test tests/WithLove.Web.Tests/WithLove.Web.Tests.csproj          # ~0.1 s
+dotnet test tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj  # ~55 s
+dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj  # ~40 s
+```
+
+CI is unaffected: it partitions by `Category=Unit` / `Category!=Unit`, so the AppHost suite is
+already excluded from both steps.
+
+### What is covered
+
+- **Durable chat tools** — failure classification (404 answers, 5xx/408/429 retry, other 4xx fail
+  fast), tool/declaration schema agreement, cart and navigation turn state, session ownership
+- **Temporal wiring** — data converter reconciliation, mixed AI/non-AI workflow serialization,
+  workflow replay against a recorded history
+- **Prompt safety** — prompt-injection sanitization, and the fields `UserContext` is allowed to
+  carry into append-only workflow history
+- **Cart** — quantity bounds and saturating arithmetic across both `ICartService` implementations,
+  anonymous-cart merge, persistence
+- **Products API** — ETags and conditional requests, RFC 9457 Problem Details, API version
+  validation, error and response-header middleware, caching, hybrid-search RRF merge, pagination
+
+Test organization (per project):
 - `Unit/` — Middleware, filters, utilities, services
-- `Integration/` — Cache invalidation, database operations
+- `Integration/` — Anything requiring a real Temporal environment, AppHost or database
 - `Features/` — Health checks, pagination, search, response headers
-- `Database/` — Database verification and migrations
-- `Cache/` — Cache behavior and tag-based invalidation
+- `Replay/` — Recorded workflow histories replayed to catch non-deterministic changes
+- `Traits/` — Shared xUnit trait constants, including the CI exclusion contract
 
 ## Architecture
 
@@ -83,8 +141,8 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 - **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.1.1). Entry point for running the full distributed application locally. Launches and manages all other services.
 - **WithLove.ServiceDefaults** — Shared Aspire service defaults library. Configures OpenTelemetry (tracing, metrics, logging), health checks (`/health`, `/alive`), HTTP resilience, and service discovery. Referenced by service projects.
 - **WithLove.Data** — Shared data access layer (class library). Contains EF Core `DbContext` and domain models (`Product`, `Category`) used across multiple services. Enables code reuse and consistent data access patterns across the application.
-- **WithLove.Web** — Blazor Server host. Serves the Blazor app with both Interactive Server and Interactive WebAssembly render modes. References the `.Client` project for WASM components.
-- **WithLove.Web.Client** — Blazor WebAssembly client project (`Microsoft.NET.Sdk.BlazorWebAssembly`). Contains components that run in the browser via WASM.
+- **WithLove.Web** — Blazor Web App host. Serves the storefront with Static SSR plus Interactive Server render modes, hosts the Blazor components, shared web models/services, and the chat/Stripe/loyalty Temporal client code. There is **no** separate `.Client` WebAssembly project.
+- **WithLove.Workflows** — Temporal workflow and activity class library. Contains the durable chat workflow (`GiftShopChatWorkflow`), the tool catalog, and the Stripe/loyalty/onboarding/database workflows. Referenced by `WithLove.WorkflowServer` (implementations) and `WithLove.Web` (declarations and client-side contracts).
 - **WithLove.WorkflowServer** — Temporal worker host. Connects to Temporal (default `localhost:7233`) using `ClientEnvConfig.LoadClientConnectOptions()` for configuration. Registers a hosted worker on the `with-love-tasks` task queue. Also exposes an OpenAPI endpoint in development.
 - **WithLove.ProductsAPI** — ASP.NET Core Web API service. Implements REST endpoints for product and category management. References `WithLove.Data` for EF Core integration and `WithLove.ServiceDefaults` for Aspire telemetry and health checks.
 
@@ -118,14 +176,15 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ## Component File Structure
 
-Components are organized by type in `src/WithLove.Web/WithLove.Web/Components/`:
+Components are organized by type in `src/WithLove.Web/Components/`:
 - **`Layout/`** — App shell: MainLayout, SiteHeader, SiteFooter
 - **`Shared/`** — Reusable UI components: ProductCard*, CategoryCircle, TrustBadge, QuantitySelector, Breadcrumb, Pagination, ChatFab, QuizOverlay, etc.
 - **`Pages/`** — Routable pages: Home, CollectionPage, ProductDetail, Cart, Checkout (and their supporting sub-components)
 
-**Shared models and services** live in `src/WithLove.Shared/`:
-- `Models/` — Product, Category, CartItem, GiftEnhancement, CheckoutModel, OrderSummary, BreadcrumbItem, etc.
-- `Services/` — IProductService, ICartService, InMemoryCartService
+**Web models and services** live inside the `WithLove.Web` project itself — there is no `WithLove.Shared` project:
+- `src/WithLove.Web/Models/` (namespace `WithLove.Web.Models`) — Product, Category, CartItem, GiftEnhancement, CheckoutModel, OrderSummary, BreadcrumbItem, AccountModels, etc.
+- `src/WithLove.Web/Services/` (namespace `WithLove.Web.Services`) — IProductService, ICartService, FusionCacheCartService, InMemoryCartService, ChatService, ILoyaltyService, etc.
+- Cross-process contracts shared with the worker (chat request/turn state, workflow inputs) live in `src/WithLove.Workflows/`, not in a `Shared` project.
 
 ## Blazor Render Modes
 
@@ -182,18 +241,22 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 
 **Temporal Workflow** (`WithLove.GiftShopChatWorkflow`):
 - Package-backed durable session per user with a 24-hour workflow-run lifetime
-- Update: `SendMessageAsync(DurableSessionRequest)` — processes one durable model/tool turn
-- Query: `GetHistory()` — retrieves display-projected conversation history for UI hydration
+- Update: `SendMessageAsync(DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>)` — processes one durable model/tool turn. A `[WorkflowUpdateValidator]` rejects malformed identity, message, turn-state, or dispatch data before any activity is scheduled.
+- Query: `GetHistory()` — returns the **raw** `IReadOnlyList<DurableSessionEntry>` durable session history, **including system instructions and the full tool-call protocol**. It is not filtered or redacted. Display projection happens client-side in Web via `GiftShopChatResponseProjector.ProjectHistory`, and that projection is a rendering convenience — **not** a data-removal boundary. See `docs/temporal-ai-chat.md` for what ends up in Temporal payloads.
 - Signal: `RequestShutdownAsync()` — graceful session shutdown
 - Every model step runs as `GetChatStep`; every tool invocation runs as a separate `InvokeFunction` activity
 - Tool iteration is explicitly capped at 40; incomplete turns apply no cart/navigation commands
 
 **Durable AI tools** (`GiftShopChatToolService` + `GiftShopChatToolCatalog`):
 - System prompt defines LA personality: warm, playful, conversational
-- Tools: `search_products`, `get_product_details`, `get_categories`, `browse_category`, `add_to_cart`, `remove_from_cart`, **`view_cart`**, **`clear_cart`**
+- 13 model-visible tools, frozen in `GiftShopChatToolCatalog.CreateDeclarations()` (that method is the single source of truth — update this list when it changes):
+  - Catalog reads: `search_products`, `get_product_details`, `get_categories`, `browse_category`
+  - Cart: `add_to_cart`, `remove_from_cart`, `view_cart`, `clear_cart`
+  - Navigation: `navigate_to_product`, `navigate_to_collection`, `navigate_to_cart`, `navigate_to_checkout`
+  - Loyalty: `view_loyalty_points`
 - Tool results are concise summaries, not raw JSON, to reduce token usage and improve accuracy
 - Typed turn state accumulates cart/navigation commands sequentially and Web applies them only after a final response
-- `AddDurableAI` configures the shared worker's data converter; manually created Temporal clients must use `DurableAIDataConverter.Instance`
+- `AddDurableAI` configures the shared worker's data converter, and `AddGiftShopChatWorkflowClient()` configures Web's DI `ITemporalClient` as a side effect — the same client `StripeEventHandler` and `TemporalLoyaltyService` use. Manually created Temporal clients must use `DurableAIDataConverter.Instance`. The converter is applied only while `DataConverter` is still `DataConverter.Default`; a custom converter or `PayloadCodec` causes a **silent, log-only skip**. See `docs/temporal-ai-chat.md`.
 
 **Blazor Integration** (`ChatService`):
 - Scoped service bridges Blazor UI ↔ Temporal workflow
@@ -211,7 +274,7 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 
 **Standardized usage:**
 - **`Category`** = Internal/technical term used throughout C# code
-  - Model: `WithLove.Shared.Models.Category`
+  - Model: `WithLove.Web.Models.Category` (web/UI) and `WithLove.Data.Models.Category` (EF Core entity)
   - Service interface methods: `GetCategoryAsync()`, `GetCategoriesAsync()`, `GetProductsByCategoryAsync()`
   - Component names: `CategoryCircle.razor`, `CategorySidebar.razor`
   - Variables: `category`, `categories`

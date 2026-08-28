@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using TemporalCommunity.Extensions.AI;
 using WithLove.Web.Models;
 using WithLove.Workflows.Chat;
+using WithLove.Workflows.Workflows;
 
 namespace WithLove.Web.Services;
 
@@ -39,15 +40,24 @@ public class ChatService(
         var auth = await authStateProvider.GetAuthenticationStateAsync();
         var userId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
+        // Built through GiftShopChatWorkflow.WorkflowIdFor so the session ID has exactly one
+        // definition. The workflow's update validator rejects a turn whose UserContext.UserId does
+        // not resolve to Workflow.Info.WorkflowId, so a second copy of this format string here
+        // would break every authenticated chat the moment the two drifted.
+        // An anonymous session has no user identity to bind, so it is keyed by an unguessable
+        // GUID that intentionally cannot collide with any real user ID.
         _workflowId = userId is not null
-            ? $"giftshop-chat-{userId}"
-            : $"giftshop-chat-anon-{Guid.NewGuid():N}";
+            ? GiftShopChatWorkflow.WorkflowIdFor(userId)
+            : GiftShopChatWorkflow.WorkflowIdFor($"anon-{Guid.NewGuid():N}");
 
         var name = auth.User.FindFirst(ClaimTypes.Name)?.Value
                    ?? auth.User.FindFirst(ClaimTypes.GivenName)?.Value;
-        var email = auth.User.FindFirst(ClaimTypes.Email)?.Value;
-        if (name is not null || email is not null || userId is not null)
-            _userContext = new UserContext(name, email, userId);
+
+        // The email claim is deliberately not read. UserContext is serialized into Temporal
+        // workflow history on every model step and every tool call, and history is append-only —
+        // so only data with a real server-side consumer is allowed to travel on it.
+        if (name is not null || userId is not null)
+            _userContext = new UserContext(name, userId);
 
         instrumentation.ChatSessionsStarted.Add(
             1,
@@ -96,8 +106,12 @@ public class ChatService(
         if (_workflowId is null)
             throw new InvalidOperationException("Call InitializeAsync first.");
 
+        // Correlation only — this is a telemetry and log-stitching key, not an idempotency key.
+        // A fresh GUID per call can never deduplicate anything, so it must not be used as a
+        // Temporal Update ID; doing so advertises a safety guarantee that does not exist.
         var operationId = Guid.NewGuid().ToString("N");
         var completion = "Failed";
+        UsageDetails? usage = null;
         var stopwatch = Stopwatch.StartNew();
         using var activity = instrumentation.ActivitySource.StartActivity("chat.turn");
         activity?.SetTag("chat.operation_id", operationId);
@@ -124,6 +138,19 @@ public class ChatService(
                 ChatOptions = new ChatOptions
                 {
                     Instructions = GiftShopChatPrompt.BuildInstructions(_userContext),
+
+                    // Always bound the output budget. A single turn runs up to the workflow's
+                    // 40-iteration tool cap, so an unbounded step does not cost one runaway
+                    // generation — it costs forty, each retried up to three times by Temporal.
+                    // 2,000 is sized for this workload: LA answers in 2-3 sentences and the
+                    // largest legitimate output is a detailed product description. It is
+                    // deliberately not tighter, because gpt-5-nano is a reasoning model whose
+                    // reasoning tokens bill against this same budget, and a budget exhausted
+                    // mid-reasoning yields an empty message rather than a truncated one.
+                    //
+                    // Temperature is intentionally left unset: reasoning models reject or ignore
+                    // sampling parameters, so pinning it here would be misleading at best.
+                    MaxOutputTokens = 2000,
                 },
                 Options = new DurableTurnOptions
                 {
@@ -135,6 +162,11 @@ public class ChatService(
                 _workflowId,
                 operationId,
                 request);
+
+            // Summed by the package across every model step in this turn, so it is the whole cost
+            // of the turn and not just its last call. Recorded in the finally block so the
+            // completion reason tag is the same one the duration histogram carries.
+            usage = result.Response.Usage;
 
             var assistantMessage = GiftShopChatResponseProjector.GetDisplayAssistantText(
                 result.Response.Messages);
@@ -158,11 +190,50 @@ public class ChatService(
             activity?.SetTag("chat.completion_reason", completion);
             if (completion == "Failed")
                 activity?.SetStatus(ActivityStatusCode.Error);
+            var completionTag = new KeyValuePair<string, object?>("completion_reason", completion);
             instrumentation.ChatTurnDuration.Record(
                 stopwatch.Elapsed.TotalMilliseconds,
-                new KeyValuePair<string, object?>("completion_reason", completion));
+                completionTag);
+            RecordTokenUsage(usage, completionTag);
             IsThinking = false;
         }
+    }
+
+    /// <summary>
+    /// Records the aggregated token cost of one durable turn.
+    /// </summary>
+    private void RecordTokenUsage(
+        UsageDetails? usage,
+        KeyValuePair<string, object?> completionTag)
+    {
+        if (usage is null)
+        {
+            instrumentation.ChatTurnsWithoutUsage.Add(1, completionTag);
+            return;
+        }
+
+        var inputTokens = usage.InputTokenCount.GetValueOrDefault();
+        var outputTokens = usage.OutputTokenCount.GetValueOrDefault();
+
+        instrumentation.ChatTokensUsed.Add(
+            inputTokens,
+            new KeyValuePair<string, object?>("token_type", "input"),
+            completionTag);
+        instrumentation.ChatTokensUsed.Add(
+            outputTokens,
+            new KeyValuePair<string, object?>("token_type", "output"),
+            completionTag);
+
+        // The package sums InputTokenCount, OutputTokenCount and TotalTokenCount across steps and
+        // nothing else, so a provider that reports no total leaves this at zero rather than null.
+        // CachedInputTokenCount and ReasoningTokenCount survive only on the per-step gen_ai spans —
+        // they are deliberately not broken out here, because a turn-level cached-token series would
+        // read as a flat zero and imply this workload never hits the prompt cache.
+        var totalTokens = usage.TotalTokenCount.GetValueOrDefault();
+        if (totalTokens == 0)
+            totalTokens = inputTokens + outputTokens;
+
+        instrumentation.ChatTurnTokens.Record(totalTokens, completionTag);
     }
 
     /// <summary>Ends the chat session by signaling the package workflow.</summary>

@@ -13,7 +13,7 @@ public class InMemoryCartService : ICartService
     private readonly List<GiftEnhancement> _enhancements = [];
 
     public IReadOnlyList<CartItem> Items => _items.AsReadOnly();
-    public int ItemCount => _items.Sum(i => i.Quantity);
+    public int ItemCount => CartQuantity.TotalItems(_items);
     public decimal Subtotal => _items.Sum(i => i.Price * i.Quantity);
     public decimal EnhancementsTotal => _enhancements.Sum(e => e.Price);
     public decimal Total => Subtotal + EnhancementsTotal;
@@ -24,15 +24,25 @@ public class InMemoryCartService : ICartService
     public Task InitializeAsync(string userId, string? anonymousCartId = null)
         => Task.CompletedTask;
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Applies the same <see cref="CartQuantity"/> bounds as
+    /// <see cref="FusionCacheCartService"/>; the two implementations must agree or a test double
+    /// will not reproduce production behaviour.
+    /// </remarks>
     public Task AddItemAsync(CartItem item)
     {
+        ArgumentNullException.ThrowIfNull(item);
+
+        var quantity = CartQuantity.Clamp(item.Quantity);
         var existing = _items.FirstOrDefault(i => i.ProductId == item.ProductId);
         if (existing is not null)
         {
-            existing.Quantity += item.Quantity;
+            existing.Quantity = CartQuantity.ClampedSum(existing.Quantity, quantity);
         }
         else
         {
+            item.Quantity = quantity;
             _items.Add(item);
         }
         OnChange?.Invoke();
@@ -54,7 +64,7 @@ public class InMemoryCartService : ICartService
             if (quantity <= 0)
                 _items.Remove(item);
             else
-                item.Quantity = quantity;
+                item.Quantity = CartQuantity.Clamp(quantity);
         }
         OnChange?.Invoke();
         return Task.CompletedTask;

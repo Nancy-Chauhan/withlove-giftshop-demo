@@ -12,6 +12,24 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION: 1
+  # Keep in sync with DevServerOptions.DownloadVersion in
+  # tests/WithLove.Workflows.Tests/Integration/Chat/GiftShopChatTemporalFixture.cs
+  TEMPORAL_CLI_VERSION: v1.7.2
+  # Tests tagged with this trait need a live OpenAI API key and are LOCAL ONLY.
+  #
+  # Why: they boot the Aspire AppHost, and WithLove.ProductsAPI/Program.cs constructs
+  # `new EmbeddingClient("text-embedding-3-small", openaiKey)`, which throws on the empty-string
+  # fallback. Supplying a placeholder key would start the app but silently degrade vector search
+  # to the FTS fallback, so hybrid-search assertions would pass for the wrong reason. A green run
+  # built on fake credentials is a false pass, so we exclude the tests outright instead.
+  #
+  # How to run them: on a developer machine, `aspire secret set "Parameters:openai-api-key" "<key>"`
+  # (see CLAUDE.md) and then `dotnet test WithLoveShop.slnx`. No filter needed locally.
+  #
+  # If real Actions secrets are ever added to this repository, EXCLUDED_TESTS_TRAIT below is the
+  # single place to flip: drop it from the two test filters and pass the keys as `Parameters__*`
+  # environment variables instead.
+  EXCLUDED_TESTS_TRAIT: RequiresSecrets
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +39,7 @@ jobs:
   build:
     name: Restore · Build · Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,7 +47,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'     
+          dotnet-version: '10.0.x'
 
       - name: Restore
         run: dotnet restore WithLoveShop.slnx
@@ -36,8 +55,101 @@ jobs:
       - name: Build
         run: dotnet build WithLoveShop.slnx --no-restore --configuration Release
 
-      - name: Test (unit only)
-        run: dotnet test WithLoveShop.slnx --no-build --configuration Release --filter "Category=Unit" --logger "trx;LogFileName=test-results.trx"
+      # The Temporal dev server binary (~550 MiB) is fetched once per test-assembly run by
+      # GiftShopChatTemporalFixture. A fresh runner has nothing on disk, so without this cache
+      # every run depends on a live download and one network blip reds every chat test at once.
+      # The chat integration tests are fully faked (ScriptedGiftShopChatClient +
+      # NoopEmbeddingGenerator), so they still run in CI and still need this binary.
+      - name: Cache Temporal CLI
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/temporal-${{ env.TEMPORAL_CLI_VERSION }}
+          key: temporal-cli-${{ runner.os }}-${{ runner.arch }}-${{ env.TEMPORAL_CLI_VERSION }}
 
-      - name: Test (durable chat integration)
-        run: dotnet test tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj --no-build --configuration Release --filter "Category=Integration&Feature=Chat" --logger "trx;LogFileName=chat-integration-results.trx"
+      # The two test steps below partition the suite by Category=Unit / Category!=Unit, and both
+      # subtract the same excluded set. So every test in the solution lands in exactly one of three
+      # buckets -- unit, non-unit, or explicitly excluded -- and this step publishes the size of the
+      # third bucket. Skipped tests must be a number in the log, never an absence nobody notices.
+      - name: Report tests excluded from CI
+        run: |
+          # Enumerate one project at a time. A solution-level `dotnet test --list-tests` runs the
+          # test projects in parallel and their stdout interleaves mid-line, concatenating two test
+          # names onto one physical line -- which silently under-counts. It is a race, so it passes
+          # most runs and corrupts the occasional one. One process per invocation removes it.
+          : > excluded-tests.log
+          : > all-tests.log
+          for proj in $(dotnet sln WithLoveShop.slnx list | grep -E '^tests[/\\]'); do
+            dotnet test "$proj" --no-build --configuration Release \
+              --list-tests --filter "$EXCLUDED_TESTS_TRAIT=true" >> excluded-tests.log 2>&1 || true
+            dotnet test "$proj" --no-build --configuration Release \
+              --list-tests >> all-tests.log 2>&1 || true
+          done
+
+          # `dotnet test --list-tests` prints one 4-space-indented fully-qualified name per test.
+          excluded=$(awk '/^    [^ ]/ { n++ } END { print n + 0 }' excluded-tests.log)
+          total=$(awk '/^    [^ ]/ { n++ } END { print n + 0 }' all-tests.log)
+
+          # Belt and braces: if interleaving ever reappears, two test names share a line. Detect
+          # that directly rather than trusting the count it would produce.
+          if grep -qE '^    [^ ].*[^ ]   +WithLove\.' all-tests.log excluded-tests.log; then
+            echo "::error title=Corrupt test enumeration::Two test names share a line, so the counts below would under-report. Enumeration output is interleaved."
+            exit 1
+          fi
+
+          # total==0 means enumeration itself broke (bad path, unbuilt assemblies, crashed runner),
+          # not that the solution has no tests. Reporting "0 excluded" there would be the very
+          # silence this step exists to prevent, so fail loudly instead.
+          if [ "$total" -eq 0 ]; then
+            echo "::error title=Test enumeration failed::Could not enumerate any tests, so the excluded-test count is not trustworthy. Full output follows."
+            cat all-tests.log
+            exit 1
+          fi
+
+          running=$((total - excluded))
+
+          echo "Excluded from CI ($EXCLUDED_TESTS_TRAIT=true):"
+          awk '/^    [^ ]/ { sub(/^    /, ""); print "  " $0 }' excluded-tests.log
+          echo "::notice title=Tests excluded from CI::${excluded} of ${total} tests are tagged ${EXCLUDED_TESTS_TRAIT}=true and run locally only; ${running} run here."
+
+          {
+            echo "### Test coverage for this run"
+            echo
+            echo "| Bucket | Count |"
+            echo "| --- | --- |"
+            echo "| Running in CI | ${running} |"
+            echo "| Excluded (\`${EXCLUDED_TESTS_TRAIT}=true\`, local only) | ${excluded} |"
+            echo "| Total in solution | ${total} |"
+            echo
+            echo "Excluded tests need a live \`Parameters:openai-api-key\`. Run them locally with \`dotnet test WithLoveShop.slnx\`."
+            echo
+            echo "<details><summary>Excluded tests (${excluded})</summary>"
+            echo
+            echo '```'
+            awk '/^    [^ ]/ { sub(/^    /, ""); print }' excluded-tests.log
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$excluded" -eq 0 ]; then
+            echo "::warning title=Exclusion filter matched nothing::No test carries ${EXCLUDED_TESTS_TRAIT}=true. Either the trait was removed from tests/WithLove.ProductsAPI.Tests or this filter is stale -- the secret-dependent tests will run and fail on the missing key."
+          fi
+
+      - name: Test (Category=Unit)
+        run: dotnet test WithLoveShop.slnx --no-build --configuration Release --filter "Category=Unit&$EXCLUDED_TESTS_TRAIT!=true" --logger "trx;LogFileName=unit-results.trx"
+
+      - name: Test (everything not tagged Unit)
+        if: ${{ !cancelled() }}
+        env:
+          # The Temporal SDK downloads the dev server into Path.GetTempPath(); pinning TMPDIR
+          # makes that location match the cache path above.
+          TMPDIR: ${{ runner.temp }}
+        run: dotnet test WithLoveShop.slnx --no-build --configuration Release --filter "Category!=Unit&$EXCLUDED_TESTS_TRAIT!=true" --logger "trx;LogFileName=non-unit-results.trx"
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn

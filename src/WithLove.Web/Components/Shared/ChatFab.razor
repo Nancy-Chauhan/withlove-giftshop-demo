@@ -2,6 +2,7 @@
 @inject ChatService ChatService
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
+@inject ILogger<ChatFab> Logger
 
 @if (!_isOpen)
 {
@@ -158,12 +159,24 @@ else
     private async Task OpenChat()
     {
         _isOpen = true;
-
-        await ChatService.InitializeAsync();
-        await ChatService.EnsureWorkflowStartedAsync();
-        await ChatService.LoadHistoryAsync();
-
         _needsScrollToBottom = true;
+
+        try
+        {
+            await ChatService.InitializeAsync();
+
+            // Order matters. EnsureWorkflowStartedAsync uses IdReusePolicy.AllowDuplicate, so
+            // calling it first starts a fresh, empty run and the previous run's transcript is no
+            // longer reachable by a query. Hydrating first salvages the last readable history.
+            await ChatService.LoadHistoryAsync();
+            await ChatService.EnsureWorkflowStartedAsync();
+        }
+        catch (Exception exception)
+        {
+            // Temporal being unreachable must not tear down the circuit. The panel still opens;
+            // the first send will surface the fallback if the session is genuinely unavailable.
+            Logger.LogError(exception, "Could not hydrate the chat session. Opening the panel anyway.");
+        }
     }
 
     private void CloseChat()
@@ -173,7 +186,15 @@ else
 
     private async Task EndChat()
     {
-        await ChatService.EndSessionAsync();
+        try
+        {
+            await ChatService.EndSessionAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not shut down the chat session cleanly.");
+        }
+
         _currentMessage = "";
     }
 
@@ -187,48 +208,72 @@ else
 
     private async Task SendMessage()
     {
+        // Checked again here so a stray invoke while a turn is in flight does not discard
+        // whatever the customer has typed. SendTurnAsync holds the authoritative guard.
         if (string.IsNullOrWhiteSpace(_currentMessage) || ChatService.IsThinking) return;
 
         var message = _currentMessage.Trim();
         _currentMessage = "";
 
-        // Show user message + thinking indicator immediately
-        ChatService.Messages.Add(new ChatHistoryEntry(true, message, DateTime.UtcNow));
-        ChatService.IsThinking = true;
-        _needsScrollToBottom = true;
-        StateHasChanged();
-
-        // Await Temporal round-trip — thinking dots visible during this await
-        var result = await ChatService.SendMessageAsync(message);
-
-        _needsScrollToBottom = true;
-        StateHasChanged();
-
-        // Navigate after UI update so user sees the response first
-        if (result.NavigationActions is { Count: > 0 })
-        {
-            Navigation.NavigateTo(result.NavigationActions[^1].Url);
-        }
+        await SendTurnAsync(message);
     }
 
     private async Task SendQuickAction(string message)
     {
         _currentMessage = "";
 
+        await SendTurnAsync(message);
+    }
+
+    /// <summary>
+    /// Runs one durable chat turn. Both entry points funnel through here so the re-entrancy guard,
+    /// the failure fallback, and the thinking-indicator reset stay identical for each.
+    /// </summary>
+    private async Task SendTurnAsync(string message)
+    {
+        if (ChatService.IsThinking) return;
+
         // Show user message + thinking indicator immediately
         ChatService.Messages.Add(new ChatHistoryEntry(true, message, DateTime.UtcNow));
         ChatService.IsThinking = true;
         _needsScrollToBottom = true;
         StateHasChanged();
 
-        var result = await ChatService.SendMessageAsync(message);
+        ChatMessageResult? result = null;
 
-        _needsScrollToBottom = true;
-        StateHasChanged();
-
-        if (result.NavigationActions is { Count: > 0 })
+        try
         {
-            Navigation.NavigateTo(result.NavigationActions[^1].Url);
+            // Await Temporal round-trip — thinking dots visible during this await
+            result = await ChatService.SendMessageAsync(message);
+        }
+        catch (Exception exception)
+        {
+            // Deliberately broad. A durable turn fails in ways the UI cannot distinguish —
+            // Temporal/infrastructure errors, a bare "Workflow update failed" from tool-schema
+            // drift, or an OverflowException raised while snapshotting the cart. There is no
+            // ErrorBoundary above this component, so anything escaping here terminates the
+            // circuit and takes the whole page with it. Render the assistant fallback instead
+            // and leave the panel usable.
+            Logger.LogError(exception, "Durable chat turn failed. Rendering the assistant fallback.");
+
+            ChatService.Messages.Add(new ChatHistoryEntry(
+                false,
+                GiftShopChatResponseProjector.AssistantFallback,
+                DateTime.UtcNow));
+        }
+        finally
+        {
+            // ChatService clears this too, but only once its own try block is entered. Clearing
+            // here as well guarantees the input and quick actions come back on every path.
+            ChatService.IsThinking = false;
+            _needsScrollToBottom = true;
+            StateHasChanged();
+        }
+
+        // Navigate after UI update so user sees the response first
+        if (result?.NavigationActions is { Count: > 0 } navigationActions)
+        {
+            Navigation.NavigateTo(navigationActions[^1].Url);
         }
     }
 

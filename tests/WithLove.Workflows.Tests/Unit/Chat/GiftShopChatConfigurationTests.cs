@@ -67,11 +67,10 @@ public class GiftShopChatConfigurationTests
     public void BuildInstructions_AddsCustomerContextWithoutChangingToolConfiguration()
     {
         var instructions = GiftShopChatPrompt.BuildInstructions(
-            new UserContext("Avery", "avery@example.test", "user-7"));
+            new UserContext("Avery", "user-7"));
 
         instructions.Should().Contain("You are LA");
-        instructions.Should().Contain("Name: Avery");
-        instructions.Should().Contain("Email: avery@example.test");
+        instructions.Should().Contain("<customer_name>Avery</customer_name>");
         instructions.Should().NotContain("user-7");
     }
 

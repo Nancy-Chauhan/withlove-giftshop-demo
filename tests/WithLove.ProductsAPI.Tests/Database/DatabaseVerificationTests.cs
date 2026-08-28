@@ -5,6 +5,8 @@ using WithLove.Data;
 namespace WithLove.ProductsAPI.Tests.Database;
 
 [Collection("Integration")]
+// Boots the Aspire AppHost, which needs Parameters:openai-api-key. Excluded from CI.
+[Trait(TestTraits.RequiresSecrets, TestTraits.True)]
 public class DatabaseVerificationTests
 {
     private readonly IntegrationTestFixture _fixture;

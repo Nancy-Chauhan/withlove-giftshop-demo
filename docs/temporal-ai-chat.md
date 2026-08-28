@@ -34,15 +34,63 @@ workflow, the same declarations, and scoped implementation factories. The provid
 is intentionally bare; it must not use MEAI `UseFunctionInvocation()` because the durable package
 owns function invocation.
 
+Both registrations consume `GiftShopChatToolCatalog`, which freezes each tool name, description,
+argument schema, and return schema. `AITool.AdditionalProperties` remains empty as required by
+package 0.12.1.
+
+### How each process acquires the data converter
+
 `AddDurableAI` applies `DurableAIDataConverter` to the hosted worker client. Because GiftShop runs
 chat and ordinary workflows on that shared worker, the converter applies to every workflow and
 activity payload handled by it, not only `WithLove.GiftShopChatWorkflow`. Any independently created
 Temporal client that reads those payloads must also use `DurableAIDataConverter.Instance`.
 `DatabaseSetupHostedService` configures its direct startup client accordingly.
 
-Both registrations consume `GiftShopChatToolCatalog`, which freezes each tool name, description,
-argument schema, and return schema. `AITool.AdditionalProperties` remains empty as required by
-package 0.12.1.
+**Web gets the same converter, but as a side effect of a call that does not mention converters.**
+This is the least obvious wiring in the feature, so it is spelled out here:
+
+```
+AddGiftShopChatWorkflowClient()
+  → AddDurableChatWorkflowInputFactory(taskQueue, ConfigureDurableExecution)
+    → DurableAIRegistrar.RegisterWorkflowInputServices(services, options)
+      → RegisterClientDataConverterServices(services)
+        → services.TryAddEnumerable(
+              IConfigureOptions<TemporalClientConnectOptions> → DurableAIClientOptionsConfigurator)
+```
+
+`DurableAIClientOptionsConfigurator` runs `DurableAIDataConverterPlugin.ApplyToConnectOptions`
+against the `TemporalClientConnectOptions` produced by `AddTemporalClient`. Web registers exactly
+one DI `ITemporalClient`, so the durable-chat registration **reconfigures the client that
+`StripeEventHandler` and `TemporalLoyaltyService` also resolve**. Nothing in
+`AddGiftShopChatWorkflowClient`'s name signals this. If you ever split Web's Temporal clients, or
+stop calling `AddGiftShopChatWorkflowClient`, those two consumers change converter silently.
+
+### The converter is applied conditionally, and a skip is log-only
+
+Both application paths — the plugin on the worker client and the `IConfigureOptions` on Web's
+connect options — apply the converter **only while `DataConverter` is still `DataConverter.Default`**:
+
+```csharp
+if (options.DataConverter == DataConverter.Default)
+{
+    options.DataConverter = DurableAIDataConverter.Instance;   // applied
+}
+else
+{
+    _logger?.LogConverterSkippedForConnectOptions(...);        // skipped — log only, no throw
+}
+```
+
+`DataConverter` is a record, so any non-default value fails the equality check. Setting a custom
+converter **or merely attaching a `PayloadCodec`** (encryption, compression) therefore silently
+opts the process out of `DurableAIDataConverter` — with a log line and no exception. Startup
+succeeds, the worker connects, and the mismatch first appears as successful workflows returning
+null or default-valued typed members.
+
+If GiftShop ever needs a codec, do not choose between the codec and the AI converter: compose them
+(`DurableAIDataConverter.Instance with { PayloadCodec = codec }`) or fail startup loudly on an
+incompatible converter. Assigning `DurableAIDataConverter.Instance` unconditionally would discard
+the codec, which is the same class of silent-data bug in the other direction.
 
 ## Turn contracts and identity
 
@@ -55,11 +103,21 @@ It is available to activities but absent from the model-visible tool schema.
 - accumulated cart commands;
 - accumulated navigation commands.
 
-`ChatService` creates one operation ID for a logical send and uses it as request data,
-`CorrelationId`, and `WorkflowUpdateOptions.Id`. Temporal Update-ID deduplication applies within one
-workflow run. Continue-as-new starts another run, so the ID is not a cross-run business idempotency
-key. GiftShop does not automatically retry a send across a run boundary. Current tools return
-commands or perform reads; Web applies returned cart commands once after a final response.
+`ChatService` creates one operation ID for a logical send and uses it as request data and
+`CorrelationId`. It is **correlation and telemetry only** — it is deliberately *not* set as
+`WorkflowUpdateOptions.Id`.
+
+The operation ID is a fresh GUID minted per call and never persisted or replayed, so using it as an
+Update ID would provide no deduplication at all — not across continue-as-new boundaries, and not
+even within a single run. Setting it would imply an idempotency guarantee that does not exist. The
+client instead asserts that the operation ID, `CorrelationId`, and `RequestData.OperationId` agree,
+turning a malformed send into a local throw rather than a Temporal round-trip.
+
+No durable tool performs an external *mutating* side effect (all six outbound calls are reads), so
+there is nothing for an idempotency key to protect today. If a tool with an external effect is ever
+added, it needs a real business idempotency key that is stable per logical send and survives
+continue-as-new — not the Update ID. Current tools return commands or perform reads; Web applies
+returned cart commands once after a final response.
 
 The Web workflow client rejects null turn options and caller-supplied tools before Temporal
 serialization, because MEAI's durable wire shape cannot preserve those invalid values. The Update
@@ -88,6 +146,14 @@ Every workflow starts from a factory-created input with these settings:
 The 24-hour value is a workflow-run lifetime, not an inactivity timeout; a successful turn does not
 reset it. The application explicitly sets 40 because package 0.12.1 defaults to 20 while the prior
 MEAI function-invocation path defaulted to 40.
+
+`MaxEntryCount` is not just the continue-as-new trigger — **it is also the trim divisor.** GiftShop
+configures no `HistoryReducer` and no `HistoryReducerKey`, so the package's `DefaultBoundedTrim`
+runs on **every** continue-as-new, whichever condition triggered it (`ContinueAsNewSuggested` or
+`history.Count >= MaxEntryCount`). It carries `min(history.Count, max(1, MaxEntryCount / 2))`
+entries into the next run. At `MaxEntryCount = 1000` that is up to 500 entries carried as a single
+continue-as-new input payload. Lowering `MaxEntryCount` lowers both the CAN frequency threshold and
+the carried-payload size together; there is no separate knob for the latter.
 
 If the model reaches the limit, the workflow returns `IterationLimitReached` and this exact visible
 message:
@@ -140,6 +206,42 @@ Authenticated workflow IDs use `giftshop-chat-{userId}`. Anonymous sessions use 
 `giftshop-chat-anon-{guid}` ID. Starts use `WorkflowIdConflictPolicy.UseExisting` for an active
 session and `WorkflowIdReusePolicy.AllowDuplicate` after a closed session. This is a sample, so old
 `ChatAgentWorkflow` executions are not migrated.
+
+## Wire-format compatibility and the rollback one-way door
+
+`DurableAIDataConverter` changes the JSON wire shape of **every** payload the configured client
+touches — not only chat payloads — because Web and workflowServer each use one client for all
+workflows. That makes deploy-direction compatibility a property worth stating explicitly.
+
+**Forward (deploy) is safe.** History written before the change uses PascalCase property names and
+numeric enum values. `DurableAIDataConverter` deserializes with `PropertyNameCaseInsensitive = true`
+and a `JsonStringEnumConverter` configured to allow integer values, so old payloads round-trip
+correctly under the new converter. In-flight `StripeCheckoutOrderWorkflow`,
+`LoyaltyAccountWorkflow`, and `CustomerOnboardingWorkflow` executions survive the deploy.
+
+**Reverse (rollback) is silently destructive.** The new converter writes camelCase property names
+and string enum values. The stock converter has `PropertyNameCaseInsensitive = false`. A rolled-back
+build therefore fails to bind almost every property written by the new build: a resumed
+`StripeCheckoutOrderWorkflow` comes back with `CheckoutSessionId = null`, a resumed
+`LoyaltyAccountWorkflow` with `Balance = 0`. **No exception is thrown and nothing is logged.** The
+workflow reports success while operating on defaulted state.
+
+The transferable lesson, which is the reason this section exists in a sample repo:
+
+> **A data-converter swap is a one-way door unless the rollback build pins the new converter.**
+> Case-insensitive deserialization makes the *forward* direction look safe and is easy to verify;
+> it says nothing about the reverse direction, because the property that saves you going forward
+> (tolerant reads) is exactly the property the old build lacks. Whenever you change a serialization
+> format on durable state, test `new → old` explicitly, not only `old → new`. A test that only
+> covers the safe direction produces false confidence.
+
+Two corollaries worth copying:
+
+- Compatibility tests for a converter change must assert **both** directions. `old → new` passing
+  is the expected result and proves little.
+- If you cannot pin the converter in the rollback build, the only safe rollback is to drain
+  in-flight executions of every affected workflow type first — which means the change is
+  operationally irreversible for the duration of your longest-running workflow.
 
 ## Observability
 
