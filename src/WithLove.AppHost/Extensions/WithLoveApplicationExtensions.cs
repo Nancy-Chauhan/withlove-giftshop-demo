@@ -1,4 +1,5 @@
 using Aspire.Hosting.Azure;
+using Aspire.Hosting.Pipelines;
 using Azure.Provisioning.KeyVault;
 using TemporalCommunity.Aspire.Hosting;
 using Temporalio.Common;
@@ -8,13 +9,15 @@ namespace WithLove.AppHost.Extensions;
 internal static partial class WithLoveApplicationExtensions
 {
     private const string ProductsDatabaseResourceName = "productsDatabase";
+    private const string StripeWebhookSecretParameterName = "stripe-webhook-secret";
+    private const string StripeWebhookSecretPrefix = "whsec_";
 
     public static void AddWithLoveApplication(
         this IDistributedApplicationBuilder builder,
         bool isPublishMode,
         bool isTestMode)
     {
-        var parameters = AddParameters(builder);
+        var parameters = AddParameters(builder, isPublishMode);
         var infrastructure = AddInfrastructure(builder, isPublishMode, isTestMode, parameters);
         var productsApi = AddProductsApi(builder, infrastructure, parameters);
 
@@ -36,7 +39,7 @@ internal static partial class WithLoveApplicationExtensions
         ConfigureShopSite(application.ShopSite);
     }
 
-    private static WithLoveParameters AddParameters(IDistributedApplicationBuilder builder)
+    private static WithLoveParameters AddParameters(IDistributedApplicationBuilder builder, bool isPublishMode)
         => new(
             builder.AddParameter("openai-api-key", secret: true),
             builder.AddParameter("stripe-api-key", secret: true),
@@ -45,7 +48,102 @@ internal static partial class WithLoveApplicationExtensions
             builder.AddParameter("temporal-address"),
             builder.AddParameter("temporal-namespace"),
             builder.AddParameter("temporal-api-key", secret: true),
-            builder.AddParameter("stripe-webhook-secret", secret: true));
+            // Publish-only. Locally, `stripe listen` mints a fresh signing secret per session and
+            // ConfigureLocalDependencies supplies it through the CLI container's
+            // Stripe__Default__WebhookSecret. Declaring the parameter in run mode would ask every
+            // developer to maintain a value that no local code path reads — and a credential no
+            // local path exercises is a credential whose corruption first surfaces in Azure, as a
+            // silent Stripe signature mismatch. Declare it only where it is consumed.
+            StripeWebhookSecret: isPublishMode ? AddStripeWebhookSecret(builder) : null);
+
+    /// <summary>
+    /// Declares the Azure-only Stripe webhook signing secret and rejects a malformed value while
+    /// publishing, before it can be written into a Key Vault secret.
+    /// </summary>
+    private static IResourceBuilder<ParameterResource> AddStripeWebhookSecret(IDistributedApplicationBuilder builder)
+    {
+        var parameter = builder.AddParameter(StripeWebhookSecretParameterName, secret: true);
+
+        // A named pipeline step rather than a BeforePublishEvent subscriber: the 13.5.3 pipeline
+        // never raises BeforePublishEvent, so a subscriber there is silently never invoked. Ordering
+        // uses the public WellKnownPipelineSteps constants — after parameter values are resolved,
+        // before any publish work — so a malformed value fails the `aspire publish`/`aspire deploy`
+        // pipeline with a named step and no Bicep is written. That beats a well-formed-looking
+        // deployment that fails Stripe signature verification at runtime with no obvious cause.
+        // WellKnownPipelineSteps is still marked evaluation-only in 13.5.3. The alternative is
+        // hard-coding "process-parameters"/"publish-prereq" as literals, which breaks just as
+        // easily and without a compiler diagnostic to warn you. Scoped like the AZPROVISION001
+        // pragma in WithLoveApplicationExtensions.ContainerApps.cs.
+#pragma warning disable ASPIREPIPELINES001
+        parameter.WithPipelineStepFactory(
+            "validate-stripe-webhook-secret",
+            async context =>
+            {
+                var value = await parameter.Resource
+                    .GetValueAsync(context.CancellationToken)
+                    .ConfigureAwait(false);
+
+                ValidateStripeWebhookSecret(parameter.Resource.Name, value);
+            },
+            dependsOn: [WellKnownPipelineSteps.ProcessParameters],
+            requiredBy: [WellKnownPipelineSteps.PublishPrereq],
+            description: "Rejects a malformed Stripe webhook signing secret before it reaches Key Vault.");
+#pragma warning restore ASPIREPIPELINES001
+
+        return parameter;
+    }
+
+    /// <summary>
+    /// Throws when <paramref name="value"/> is not shaped like a Stripe webhook signing secret.
+    /// The value is never included in the exception message — publish output lands in CI logs and
+    /// issue reports.
+    /// </summary>
+    /// <remarks>
+    /// <c>internal</c> rather than <c>private</c> only so it can be tested. It is a pure function
+    /// reached at publish time from a pipeline step, and booting the AppHost to exercise it would
+    /// need real secrets — see <c>StripeWebhookSecretValidationTests</c> and the
+    /// <c>InternalsVisibleTo</c> entry in WithLove.AppHost.csproj.
+    /// </remarks>
+    internal static void ValidateStripeWebhookSecret(string parameterName, string? value)
+    {
+        // Ordered most-specific first: a smart-quote-wrapped value also fails the prefix check, but
+        // "wrapped in quotes" is the message that actually tells someone what to fix. Shells and
+        // note-taking apps are how the wrapping gets there in the first place.
+        var reason = value switch
+        {
+            null or "" => "the value is empty",
+            _ when value.Trim() != value => "the value has leading or trailing whitespace",
+            _ when IsQuoteWrapped(value) => "the value is wrapped in quote characters (straight or smart quotes)",
+            _ when !value.StartsWith(StripeWebhookSecretPrefix, StringComparison.Ordinal)
+                => $"the value does not start with '{StripeWebhookSecretPrefix}'",
+            _ when value.Length == StripeWebhookSecretPrefix.Length
+                => $"the value is only the '{StripeWebhookSecretPrefix}' prefix",
+            _ => null,
+        };
+
+        if (reason is null)
+            return;
+
+        throw new DistributedApplicationException(
+            $"Parameter '{parameterName}' is not a valid Stripe webhook signing secret: {reason}. " +
+            $"Expected a single-line value beginning with '{StripeWebhookSecretPrefix}' and no surrounding " +
+            "quotes or whitespace, as printed by `stripe listen --print-secret` or shown on the Stripe " +
+            $"Dashboard webhook endpoint. Observed length: {value?.Length ?? 0} characters. " +
+            $"Fix it in .secrets.env: Parameters__{parameterName.Replace('-', '_')}=\"whsec_...\" — " +
+            "this parameter is publish-only, and `aspire deploy` reads its own cache from " +
+            ".secrets.env, not the `aspire secret set` user-secret store (see " +
+            "docs/azure-deployment.md Step 5). The value itself is deliberately not shown.");
+    }
+
+    private static bool IsQuoteWrapped(string value)
+        // U+2018/U+2019/U+201C/U+201D are the smart quotes editors and chat clients substitute for
+        // straight quotes; a pasted secret carrying them is longer than the real secret and will
+        // never verify.
+        => value.Length > 0
+           && (IsQuote(value[0]) || IsQuote(value[^1]));
+
+    private static bool IsQuote(char candidate)
+        => candidate is '"' or '\'' or '`' or '‘' or '’' or '“' or '”';
 
     private static WithLoveInfrastructure AddInfrastructure(
         IDistributedApplicationBuilder builder,
@@ -189,11 +287,15 @@ internal static partial class WithLoveApplicationExtensions
         var sharedIdentity = builder.AddAzureUserAssignedIdentity("withlove-identity");
         var sqlIdentityAccess = AddAzureSqlIdentityAccess(builder, infrastructure, sharedIdentity);
 
+        var stripeWebhookSecret = parameters.StripeWebhookSecret
+            ?? throw new InvalidOperationException(
+                $"The '{StripeWebhookSecretParameterName}' parameter is only declared in publish mode.");
+
         // Key Vault secret names must not collide with parameter resource names.
         keyVault.AddSecret("kv-openai-api-key", parameters.OpenAiKey);
         keyVault.AddSecret("kv-stripe-api-key", parameters.StripeApiKey);
         keyVault.AddSecret("kv-stripe-public-key", parameters.StripePublicKey);
-        keyVault.AddSecret("kv-stripe-webhook-secret", parameters.StripeWebhookSecret);
+        keyVault.AddSecret("kv-stripe-webhook-secret", stripeWebhookSecret);
         keyVault.AddSecret("kv-temporal-api-key", parameters.TemporalApiKey);
 
         var temporalCloud = builder.AddTemporalCloud(
@@ -284,7 +386,10 @@ internal static partial class WithLoveApplicationExtensions
         IResourceBuilder<ParameterResource> TemporalAddress,
         IResourceBuilder<ParameterResource> TemporalNamespace,
         IResourceBuilder<ParameterResource> TemporalApiKey,
-        IResourceBuilder<ParameterResource> StripeWebhookSecret);
+        // Null in run mode: the Stripe CLI container supplies the webhook secret locally, so the
+        // parameter is never requested there. Same shape as WithLoveInfrastructure.AzureSqlServer —
+        // publish-only members are nullable and unwrapped with a throw on the Azure path.
+        IResourceBuilder<ParameterResource>? StripeWebhookSecret);
 
     private sealed record WithLoveInfrastructure(
         IResourceBuilder<IResourceWithConnectionString> ProductsDatabase,
