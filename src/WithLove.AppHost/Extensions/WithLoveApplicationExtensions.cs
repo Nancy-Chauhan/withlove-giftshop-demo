@@ -58,8 +58,9 @@ internal static partial class WithLoveApplicationExtensions
         if (isPublishMode)
         {
             azureSqlServer = builder.AddAzureSqlServer("sqlServer")
-                // Aspire 13.4.6 generates one incompatible SQL role script per consumer.
-                // A single shared identity only needs one database principal, provisioned below.
+                // Aspire 13.5 fixes the earlier SQL role-script implementation, but the shared-
+                // identity case is still unverified. Provision one database principal for all
+                // three application consumers until upstream role-module deduplication is proven.
                 .ClearDefaultRoleAssignments();
             productsDatabase = azureSqlServer.AddDatabase(ProductsDatabaseResourceName);
         }

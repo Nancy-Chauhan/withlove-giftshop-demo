@@ -138,7 +138,7 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ### Projects
 
-- **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.1.1). Entry point for running the full distributed application locally. Launches and manages all other services.
+- **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.5.3). Entry point for running the full distributed application locally. Launches and manages all other services.
 - **WithLove.ServiceDefaults** — Shared Aspire service defaults library. Configures OpenTelemetry (tracing, metrics, logging), health checks (`/health`, `/alive`), HTTP resilience, and service discovery. Referenced by service projects.
 - **WithLove.Data** — Shared data access layer (class library). Contains EF Core `DbContext` and domain models (`Product`, `Category`) used across multiple services. Enables code reuse and consistent data access patterns across the application.
 - **WithLove.Web** — Blazor Web App host. Serves the storefront with Static SSR plus Interactive Server render modes, hosts the Blazor components, shared web models/services, and the chat/Stripe/loyalty Temporal client code. There is **no** separate `.Client` WebAssembly project.
@@ -148,7 +148,7 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ### Key Dependencies
 
-- **Aspire 13.1.1** — Distributed application orchestration
+- **Aspire 13.5.3** — Distributed application orchestration
 - **Temporal SDK (Temporalio 1.11.1)** — Workflow orchestration via `Temporalio.Extensions.Hosting`; the WorkflowServer reads Temporal connection config from environment variables (`ClientEnvConfig`)
 - **Blazor** — UI with combined Server + WebAssembly interactive rendering
 - **OpenTelemetry 1.15.0** — Observability (configured in ServiceDefaults)

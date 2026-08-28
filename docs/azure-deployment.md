@@ -148,9 +148,9 @@ just deploy-clean
 
 ### Azure SQL identity provisioning
 
-Aspire 13.4.6 generates an Azure SQL role script that imports `SqlServer` 22.3.0 into the Azure PowerShell 14 deployment image. That combination can fail in `Invoke-Sqlcmd` with a `Microsoft.Extensions.Caching.Memory` `MissingMethodException`. The application also uses one shared managed identity for three Container Apps, while the default Aspire model generates three role modules with the same deployment-script resource name.
+Aspire 13.5 fixes the earlier Azure SQL role script that could fail in `Invoke-Sqlcmd` with a `Microsoft.Extensions.Caching.Memory` `MissingMethodException`. The application still uses one shared managed identity for three Container Apps, and that shared-identity role-module case has not been verified as safe with the default Aspire model.
 
-The AppHost disables those default SQL role assignments and deploys one repository-owned `sql-identity-access` Bicep resource instead. It acquires an Azure SQL token, uses the in-box `System.Data.SqlClient`, reconciles the shared identity's database user by SID, and grants `db_owner` idempotently. Remove this workaround only after upgrading to an Aspire release that contains the upstream fix and verifying that a shared identity no longer produces duplicate role scripts.
+The AppHost therefore continues to disable the default SQL role assignments and deploy one repository-owned `sql-identity-access` Bicep resource instead. It acquires an Azure SQL token, uses the in-box `System.Data.SqlClient`, reconciles the shared identity's database user by SID, and grants `db_owner` idempotently. Remove this workaround only after verifying through published artifacts and a disposable Azure deployment that the default model emits one safe role-provisioning path for the shared identity.
 
 ## Step 4 — Create the Stripe Event Destination
 

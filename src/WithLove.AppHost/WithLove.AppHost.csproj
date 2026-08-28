@@ -1,10 +1,13 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.4.6">
+<Project Sdk="Aspire.AppHost.Sdk/13.5.3">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <!-- Preserve direct dotnet/IDE AppHost execution; evaluate CLI bundle delegation separately. -->
+        <AspireUseCliBundle>false</AspireUseCliBundle>
+        <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
         <UserSecretsId>909fc674-6133-45e7-86cc-a46a15048bf4</UserSecretsId>
     </PropertyGroup>
 
@@ -15,13 +18,13 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.6" />
-      <PackageReference Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.6" />
-      <PackageReference Include="Aspire.Hosting.Azure.Redis" Version="13.4.6" />
-      <PackageReference Include="Aspire.Hosting.Azure.Sql" Version="13.4.6" />
-      <PackageReference Include="Aspire.Hosting.Redis" Version="13.4.6" />
-      <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.4.6" />
-      <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlServer.Extensions" Version="13.4.0" />
+      <PackageReference Include="Aspire.Hosting.Azure.AppContainers" Version="13.5.3" />
+      <PackageReference Include="Aspire.Hosting.Azure.KeyVault" Version="13.5.3" />
+      <PackageReference Include="Aspire.Hosting.Azure.Redis" Version="13.5.3" />
+      <PackageReference Include="Aspire.Hosting.Azure.Sql" Version="13.5.3" />
+      <PackageReference Include="Aspire.Hosting.Redis" Version="13.5.3" />
+      <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.3" />
+      <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlServer.Extensions" Version="13.5.0" />
       <PackageReference Include="Stripe.Hosting.Aspire" Version="0.3.8" />
       <PackageReference Include="TemporalCommunity.Aspire.Hosting" Version="0.2.0" />
       <PackageReference Include="Temporalio" Version="1.17.0" />
