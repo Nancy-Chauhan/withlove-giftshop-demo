@@ -1,6 +1,6 @@
 # Durable AI chat architecture
 
-GiftShop uses the published `TemporalCommunity.Extensions.AI` 0.12.1 package to run LA, the chat
+GiftShop uses the published `TemporalCommunity.Extensions.AI` 0.14.2 package to run LA, the chat
 shopping assistant. The application keeps its existing `Microsoft.Extensions.AI` model provider,
 but the package owns durable turn serialization, model/tool iteration, activity retries, session
 history, shutdown, and continue-as-new.
@@ -13,8 +13,8 @@ Web starts the explicitly named `WithLove.GiftShopChatWorkflow`. A message is su
 
 1. `TemporalCommunity.Extensions.AI.GetChatStep` for one model response.
 2. One `TemporalCommunity.Extensions.AI.InvokeFunction` activity for every requested tool.
-3. Another model step after tool results, until the model returns a final response or the configured
-   40-iteration limit is reached.
+3. Another model step after tool results, until the model returns a final response, reports an
+   incomplete terminal response, or reaches the configured 40-iteration limit.
 
 GiftShop dispatches tools sequentially. Cart and navigation tools replace typed turn state, so a
 later tool in the same model response sees the result of an earlier tool. This is required for
@@ -22,6 +22,11 @@ sequences such as `add_to_cart` followed by `view_cart`.
 
 The Blazor UI remains non-streaming: it waits for the durable Update to finish, then applies the
 returned commands and displays the final assistant text.
+
+Each model step has a 4,000-token output ceiling and requests low reasoning effort with reasoning
+output omitted. Package 0.14.2 preserves the provider finish reason and classifies `Length`,
+`ContentFilter`, and unknown terminal reasons as `IncompleteResponse` before dispatching any tool
+calls from that response. GiftShop does not retry the provider inside the same model activity.
 
 ## Split-process registration
 
@@ -36,7 +41,7 @@ owns function invocation.
 
 Both registrations consume `GiftShopChatToolCatalog`, which freezes each tool name, description,
 argument schema, and return schema. `AITool.AdditionalProperties` remains empty as required by
-package 0.12.1.
+package 0.14.2.
 
 ### How each process acquires the data converter
 
@@ -138,13 +143,15 @@ Every workflow starts from a factory-created input with these settings:
 | Heartbeat timeout | 2 minutes |
 | Retry policy | 2s initial, 2.0 backoff, 30s maximum, 3 attempts |
 | Maximum tool iterations per turn | 40 |
+| Maximum output tokens per model step | 4000 |
+| Reasoning effort | Low |
 | Consecutive errors per request | 3 |
 | Maximum history entries before continue-as-new | 1000 |
 | Package search attributes | Disabled |
 | Detailed activity errors | Disabled |
 
 The 24-hour value is a workflow-run lifetime, not an inactivity timeout; a successful turn does not
-reset it. The application explicitly sets 40 because package 0.12.1 defaults to 20 while the prior
+reset it. The application explicitly sets 40 because package 0.14.2 defaults to 20 while the prior
 MEAI function-invocation path defaulted to 40.
 
 `MaxEntryCount` is not just the continue-as-new trigger — **it is also the trim divisor.** GiftShop
@@ -162,19 +169,21 @@ message:
 Maximum tool-call iterations (40) exceeded; the conversation did not converge on a final answer.
 ```
 
-Web displays the message but applies no cart or navigation commands from that incomplete turn.
-Normal completed turns retain their model/tool protocol. Iteration-limited turns retain only the
-sentinel in durable conversation history, so typed cart or navigation commands from an incomplete
-turn are neither applied by Web nor presented to the model on the next turn.
+Web displays the message but applies no cart or navigation commands from that non-final turn.
+Normal completed turns retain their model/tool protocol. Iteration-limited and provider-incomplete
+turns retain only a sentinel in durable conversation history, so typed cart or navigation commands
+from a non-final turn are neither applied by Web nor presented to the model on the next turn.
 
 ## History and payload disclosure
 
 For completed turns, the package stores the complete per-turn MEAI response and includes prior
 assistant function calls and matching tool results in later model requests. If a turn reaches the
-iteration limit, 0.12.1 returns the complete attempted protocol and state to Web for diagnostics but
-persists only the terminal assistant sentinel. GiftShop discards that incomplete state, and later
-model requests do not inherit its tool calls or results. The UI history projector renders only user
-text plus the last non-empty assistant text; UI filtering by itself is not a data-removal boundary.
+iteration limit, 0.14.2 returns the complete attempted protocol and state to Web for diagnostics but
+persists only the terminal assistant sentinel. For `IncompleteResponse`, it likewise returns the
+diagnostic model response and provisional state while persisting only an incomplete-response
+sentinel. GiftShop discards state from both non-final outcomes, and later model requests do not
+inherit their tool calls or results. The UI history projector renders only user text plus
+customer-safe assistant text; UI filtering by itself is not a data-removal boundary.
 
 Temporal payload/history can contain:
 
@@ -196,11 +205,16 @@ its activity immediately before the effect.
 
 ## History projection and state application
 
-Immediate responses and reconnect history use the same projection rule: select the last non-empty
-assistant-role text and omit system/tool protocol. If no non-empty assistant text exists, both paths
-display the same friendly fallback rather than disagreeing or omitting the assistant entry. For
-`FinalResponse`, Web applies typed cart commands and returns navigation commands to the component.
-For `IterationLimitReached`, it applies neither.
+Immediate responses and reconnect history use the same projection rule and omit system/tool
+protocol. For `FinalResponse`, Web displays the last non-empty assistant text and applies typed cart
+and navigation commands. For `IterationLimitReached`, it displays the package limit message and
+applies no commands. For `IncompleteResponse`, both immediate and reconnect paths display the same
+customer-safe fallback and apply no commands; the package's model-facing sentinel remains in
+durable history without being shown verbatim in the UI.
+
+`search_products` asks ProductsAPI for four matches and independently caps its model-facing summary
+at four entries. The local cap prevents an unexpectedly oversized provider response from consuming
+the model context even if the API ignores its `top=4` request.
 
 Authenticated workflow IDs use `giftshop-chat-{userId}`. Anonymous sessions use a new
 `giftshop-chat-anon-{guid}` ID. Starts use `WorkflowIdConflictPolicy.UseExisting` for an active

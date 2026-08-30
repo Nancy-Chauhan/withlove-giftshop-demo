@@ -81,7 +81,7 @@ To stop, press `Ctrl+C` in the terminal.
 ## Key Features
 
 - **Hybrid Search** — Full-text search (SQL Server FTS) combined with vector similarity (OpenAI embeddings), merged via Reciprocal Rank Fusion
-- **Chat Assistant (LA)** — Package-backed durable agent using `TemporalCommunity.Extensions.AI` 0.12.1 and `Microsoft.Extensions.AI`, with every model step and tool invocation recorded as a separate Temporal activity; capped turns discard unapplied tool protocol before the next turn
+- **Chat Assistant (LA)** — Package-backed durable agent using `TemporalCommunity.Extensions.AI` 0.14.2 and `Microsoft.Extensions.AI`, with every model step and tool invocation recorded as a separate Temporal activity; iteration-limited and provider-incomplete turns discard unapplied tool protocol before the next turn
 - **Stripe Web elements** — Server-side Checkout Sessions with the Payment and Address elements integrated
 - **FusionCache + Redis** — Multi-layer caching with tag-based invalidation and Redis backplane for cross-instance sync
 - **Temporal Workflows** — Durable database setup, Stripe order processing, customer onboarding, and long-lived chat sessions

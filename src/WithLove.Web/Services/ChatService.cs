@@ -21,6 +21,8 @@ public class ChatService(
     ICartService cartService,
     Instrumentation instrumentation)
 {
+    private const int MaxOutputTokens = 4000;
+
     private string? _workflowId;
     private bool _initialized;
     private UserContext? _userContext;
@@ -142,15 +144,18 @@ public class ChatService(
                     // Always bound the output budget. A single turn runs up to the workflow's
                     // 40-iteration tool cap, so an unbounded step does not cost one runaway
                     // generation — it costs forty, each retried up to three times by Temporal.
-                    // 2,000 is sized for this workload: LA answers in 2-3 sentences and the
-                    // largest legitimate output is a detailed product description. It is
-                    // deliberately not tighter, because gpt-5-nano is a reasoning model whose
-                    // reasoning tokens bill against this same budget, and a budget exhausted
-                    // mid-reasoning yields an empty message rather than a truncated one.
+                    // The previous 2,000-token ceiling was observed to be fully consumed by
+                    // reasoning before any visible assistant text was produced. Doubling it gives
+                    // the model room to finish while retaining a firm per-step cost bound.
                     //
                     // Temperature is intentionally left unset: reasoning models reject or ignore
                     // sampling parameters, so pinning it here would be misleading at best.
-                    MaxOutputTokens = 2000,
+                    MaxOutputTokens = MaxOutputTokens,
+                    Reasoning = new ReasoningOptions
+                    {
+                        Effort = ReasoningEffort.Low,
+                        Output = ReasoningOutput.None,
+                    },
                 },
                 Options = new DurableTurnOptions
                 {
@@ -168,8 +173,11 @@ public class ChatService(
             // completion reason tag is the same one the duration histogram carries.
             usage = result.Response.Usage;
 
-            var assistantMessage = GiftShopChatResponseProjector.GetDisplayAssistantText(
-                result.Response.Messages);
+            var assistantMessage = result.CompletionReason ==
+                DurableTurnCompletionReason.IncompleteResponse
+                    ? GiftShopChatResponseProjector.AssistantFallback
+                    : GiftShopChatResponseProjector.GetDisplayAssistantText(
+                        result.Response.Messages);
 
             Messages.Add(new ChatHistoryEntry(false, assistantMessage, DateTime.UtcNow));
 

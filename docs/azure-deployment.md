@@ -42,7 +42,7 @@ The AppHost's Azure publish configuration swaps local development services for A
 
 workflowServer never scales to zero because it must continuously poll Temporal Cloud for tasks.
 
-The chat path uses `TemporalCommunity.Extensions.AI` 0.12.1. Web starts
+The chat path uses `TemporalCommunity.Extensions.AI` 0.14.2. Web starts
 `WithLove.GiftShopChatWorkflow`; workflowServer executes each model step as
 `TemporalCommunity.Extensions.AI.GetChatStep` and each requested GiftShop tool as its own
 `TemporalCommunity.Extensions.AI.InvokeFunction` activity. The extension requires Temporal Server

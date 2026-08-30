@@ -115,6 +115,29 @@ public class GiftShopChatConfigurationTests
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Unit)]
     [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void ProjectHistory_MapsIncompleteResponseSentinelToCustomerFallback()
+    {
+        var timestamp = new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero);
+        var response = DurableSessionResponse.FromChatResponse(
+            "incomplete-1",
+            new ChatResponse(new ChatMessage(
+                ChatRole.Assistant,
+                "The model did not produce a complete final response."))
+            {
+                FinishReason = ChatFinishReason.Length,
+            },
+            timestamp,
+            DurableTurnCompletionReason.IncompleteResponse);
+
+        var projected = GiftShopChatResponseProjector.ProjectHistory([response]);
+
+        projected.Should().ContainSingle().Which.Text.Should().Be(
+            GiftShopChatResponseProjector.AssistantFallback);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
     public void IterationLimitMessage_MatchesPackageContractForConfiguredBoundary()
     {
         GiftShopChatResponseProjector.IterationLimitMessage.Should().Be(

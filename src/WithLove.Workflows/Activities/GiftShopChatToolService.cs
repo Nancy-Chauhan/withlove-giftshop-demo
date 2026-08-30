@@ -12,18 +12,20 @@ internal sealed record AddToCartToolResult(string Message, CartAction? Action);
 
 internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFactory)
 {
+    internal const int MaxSearchProductMatches = 4;
+
     public async Task<string> SearchProductsAsync(string query, CancellationToken cancellationToken)
     {
         var http = httpClientFactory.CreateClient("productsApi");
         var response = await http.GetAsync(
-            $"/api/products/search?q={Uri.EscapeDataString(query)}&top=10",
+            $"/api/products/search?q={Uri.EscapeDataString(query)}&top={MaxSearchProductMatches}",
             cancellationToken);
 
         if (IsResourceMissing(response, "search_products"))
             return "No products found.";
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        return SummarizeProductList(json);
+        return SummarizeProductList(json, MaxSearchProductMatches);
     }
 
     public async Task<string> GetProductDetailsAsync(int productId, CancellationToken cancellationToken)
@@ -216,7 +218,7 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         return FormatProductSummary(document.RootElement, detailed: true);
     }
 
-    internal static string SummarizeProductList(string json)
+    internal static string SummarizeProductList(string json, int? maxItems = null)
     {
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -226,7 +228,9 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
 
         return string.Join(
             "\n",
-            items.EnumerateArray().Select(item => FormatProductSummary(item, detailed: false)));
+            items.EnumerateArray()
+                .Take(maxItems ?? int.MaxValue)
+                .Select(item => FormatProductSummary(item, detailed: false)));
     }
 
     private static string FormatProductSummary(JsonElement product, bool detailed)

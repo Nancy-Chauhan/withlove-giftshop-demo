@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using TemporalCommunity.Extensions.AI;
 using TemporalCommunity.Extensions.AI.Session;
 
 namespace WithLove.Workflows.Chat;
@@ -47,9 +48,12 @@ public static class GiftShopChatResponseProjector
                 continue;
             }
 
-            if (entry is DurableSessionResponse)
+            if (entry is DurableSessionResponse response)
             {
-                var text = GetDisplayAssistantText(entry.Messages);
+                var text = response.CompletionReason ==
+                    DurableTurnCompletionReason.IncompleteResponse
+                        ? AssistantFallback
+                        : GetDisplayAssistantText(response.Messages);
                 var timestamp = entry.Messages
                     .LastOrDefault(message =>
                         message.Role == ChatRole.Assistant && !string.IsNullOrWhiteSpace(message.Text))

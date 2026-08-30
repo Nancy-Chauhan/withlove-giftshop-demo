@@ -14,7 +14,7 @@
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
         <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.3" />
         <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
-        <PackageReference Include="TemporalCommunity.Extensions.AI" Version="0.12.1" />
+        <PackageReference Include="TemporalCommunity.Extensions.AI" Version="0.14.2" />
         <PackageReference Include="Temporalio.Extensions.DiagnosticSource" Version="1.17.0" />
         <PackageReference Include="Temporalio.Extensions.Hosting" Version="1.17.0" />
         <PackageReference Include="Temporalio.Extensions.OpenTelemetry" Version="1.17.0" />

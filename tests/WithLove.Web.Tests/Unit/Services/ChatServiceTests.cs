@@ -110,7 +110,7 @@ public class ChatServiceTests : IDisposable
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Unit)]
     [Trait(TestTraits.Feature, TestTraits.Chat)]
-    public async Task EmptyAssistantOutput_UsesSameFallbackImmediatelyAndAfterReconnect()
+    public async Task IncompleteResponse_UsesSameFallbackImmediatelyAndAfterReconnect()
     {
         var service = CreateService();
         await service.InitializeAsync();
@@ -118,7 +118,10 @@ public class ChatServiceTests : IDisposable
         var response = new ChatResponse(
         [
             new ChatMessage(ChatRole.Assistant, string.Empty),
-        ]);
+        ])
+        {
+            FinishReason = ChatFinishReason.Length,
+        };
         A.CallTo(() => _workflowClient.SendMessageAsync(
                 A<string>._,
                 A<string>._,
@@ -126,8 +129,11 @@ public class ChatServiceTests : IDisposable
             .Returns(new DurableTurnResult<GiftShopChatTurnState>
             {
                 Response = response,
-                CompletionReason = DurableTurnCompletionReason.FinalResponse,
-                FinalTurnState = GiftShopChatTurnState.Create([]),
+                CompletionReason = DurableTurnCompletionReason.IncompleteResponse,
+                FinalTurnState = new GiftShopChatTurnState(
+                    [],
+                    [new CartAction(CartActionType.Clear)],
+                    [new NavigationAction(NavigationTarget.Checkout, "/checkout")]),
             });
         A.CallTo(() => _workflowClient.GetHistoryAsync(A<string>._))
             .Returns(
@@ -136,16 +142,56 @@ public class ChatServiceTests : IDisposable
                     [new ChatMessage(ChatRole.User, "Try this")],
                     "fallback-1",
                     timestamp),
-                DurableSessionResponse.FromChatResponse("fallback-1", response, timestamp),
+                DurableSessionResponse.FromChatResponse(
+                    "fallback-1",
+                    new ChatResponse(new ChatMessage(
+                        ChatRole.Assistant,
+                        "The model did not produce a complete final response."))
+                    {
+                        FinishReason = ChatFinishReason.Length,
+                    },
+                    timestamp,
+                    DurableTurnCompletionReason.IncompleteResponse),
             ]);
 
         var immediate = await service.SendMessageAsync("Try this");
         await service.LoadHistoryAsync();
 
         immediate.AssistantMessage.Should().Be(GiftShopChatResponseProjector.AssistantFallback);
+        immediate.NavigationActions.Should().BeEmpty();
+        A.CallTo(() => _cart.ClearAsync()).MustNotHaveHappened();
         service.Messages.Select(message => message.Text).Should().Equal(
             "Try this",
             GiftShopChatResponseProjector.AssistantFallback);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task IncompleteResponse_HidesPartialProviderText()
+    {
+        var service = CreateService();
+        await service.InitializeAsync();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Returns(new DurableTurnResult<GiftShopChatTurnState>
+            {
+                Response = new ChatResponse(new ChatMessage(
+                    ChatRole.Assistant,
+                    "This answer was cut off before it was complete"))
+                {
+                    FinishReason = ChatFinishReason.Length,
+                },
+                CompletionReason = DurableTurnCompletionReason.IncompleteResponse,
+                FinalTurnState = GiftShopChatTurnState.Create([]),
+            });
+
+        var result = await service.SendMessageAsync("Try this");
+
+        result.AssistantMessage.Should().Be(GiftShopChatResponseProjector.AssistantFallback);
+        service.Messages.Last().Text.Should().Be(GiftShopChatResponseProjector.AssistantFallback);
     }
 
     [Fact]
@@ -225,6 +271,33 @@ public class ChatServiceTests : IDisposable
         await service.SendMessageAsync("Keep trying");
 
         telemetry.ShouldHaveRecorded("IterationLimitReached", ActivityStatusCode.Unset);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_IncompleteResponseRecordsAlignedCompletionTelemetry()
+    {
+        var service = CreateService();
+        await service.InitializeAsync();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Returns(new DurableTurnResult<GiftShopChatTurnState>
+            {
+                Response = new ChatResponse(new ChatMessage(ChatRole.Assistant, string.Empty))
+                {
+                    FinishReason = ChatFinishReason.Length,
+                },
+                CompletionReason = DurableTurnCompletionReason.IncompleteResponse,
+                FinalTurnState = GiftShopChatTurnState.Create([]),
+            });
+        using var telemetry = new ChatTurnTelemetryCapture(_instrumentation);
+
+        await service.SendMessageAsync("Try again");
+
+        telemetry.ShouldHaveRecorded("IncompleteResponse", ActivityStatusCode.Unset);
     }
 
     [Fact]
@@ -343,7 +416,7 @@ public class ChatServiceTests : IDisposable
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Unit)]
     [Trait(TestTraits.Feature, TestTraits.Chat)]
-    public async Task SendMessage_BoundsTheOutputBudgetAndLeavesSamplingUnset()
+    public async Task SendMessage_UsesLargerOutputBudgetAndLowReasoningEffort()
     {
         var service = CreateService();
         await service.InitializeAsync();
@@ -364,7 +437,10 @@ public class ChatServiceTests : IDisposable
         // An unbounded step does not cost one runaway generation. A single turn runs up to the
         // workflow's 40-iteration tool cap, and Temporal retries each step three times, so the
         // worst case is 120 unbounded generations for one customer message.
-        capturedOptions!.MaxOutputTokens.Should().Be(2000);
+        capturedOptions!.MaxOutputTokens.Should().Be(4000);
+        capturedOptions.Reasoning.Should().NotBeNull();
+        capturedOptions.Reasoning!.Effort.Should().Be(ReasoningEffort.Low);
+        capturedOptions.Reasoning.Output.Should().Be(ReasoningOutput.None);
 
         // gpt-5-nano is a reasoning model: sampling parameters are rejected or ignored, so pinning
         // Temperature would advertise control the deployment does not actually have.

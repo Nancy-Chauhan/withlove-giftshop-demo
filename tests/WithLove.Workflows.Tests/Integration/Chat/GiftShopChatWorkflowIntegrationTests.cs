@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
 using TemporalCommunity.Extensions.AI;
+using TemporalCommunity.Extensions.AI.Session;
 using Temporalio.Client;
 using WithLove.Web.Models;
 using WithLove.WorkflowServer.Services;
@@ -262,6 +263,79 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
         observedCleanNextTurn.Should().BeTrue();
         chatClient.CallCount.Should().Be(
             GiftShopChatRegistrationExtensions.MaxToolCallsPerTurn + 1);
+        A.CallTo(() => cart.AddItemAsync(A<CartItem>._)).MustNotHaveHappened();
+
+        await chatService.EndSessionAsync();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Integration)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task IncompleteResponse_DiscardsProvisionalCommandsAndProtocolBeforeNextTurn()
+    {
+        var observedCleanNextTurn = false;
+        var chatClient = new ScriptedGiftShopChatClient((call, messages, options) => call switch
+        {
+            1 => new ChatResponse(new ChatMessage(
+                ChatRole.Assistant,
+                [Call("add-provisional", "add_to_cart", ("productId", 7), ("quantity", 1))]))
+            {
+                FinishReason = ChatFinishReason.ToolCalls,
+            },
+            2 => new ChatResponse(new ChatMessage(ChatRole.Assistant, []))
+            {
+                FinishReason = ChatFinishReason.Length,
+            },
+            3 => new ChatResponse(new ChatMessage(
+                ChatRole.Assistant,
+                ObserveIncompleteHistory(messages, options, ref observedCleanNextTurn)))
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            _ => throw new InvalidOperationException($"Unexpected model call {call}."),
+        });
+        await using var harness = await GiftShopChatWorkerHarness.StartAsync(
+            fixture.Environment,
+            chatClient);
+        var workflowId = $"giftshop-chat-incomplete-{Guid.NewGuid():N}";
+        var handle = await StartWorkflowAsync(harness, workflowId);
+        var authentication = A.Fake<AuthenticationStateProvider>();
+        A.CallTo(() => authentication.GetAuthenticationStateAsync())
+            .Returns(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
+        var cart = A.Fake<WebCartService>();
+        A.CallTo(() => cart.Items).Returns(Array.Empty<CartItem>());
+        using var instrumentation = new WebInstrumentation();
+        var chatService = new WebChatService(
+            new WorkflowHandleChatClient(handle),
+            authentication,
+            cart,
+            instrumentation);
+        await chatService.InitializeAsync();
+
+        var incomplete = await chatService.SendMessageAsync("Add the keepsake");
+
+        incomplete.AssistantMessage.Should().Be(GiftShopChatResponseProjector.AssistantFallback);
+        incomplete.NavigationActions.Should().BeEmpty();
+        A.CallTo(() => cart.AddItemAsync(A<CartItem>._)).MustNotHaveHappened();
+        var history = await handle.QueryAsync(workflow => workflow.GetHistory());
+        var stored = history.OfType<DurableSessionResponse>().Should().ContainSingle().Which;
+        stored.CompletionReason.Should().Be(DurableTurnCompletionReason.IncompleteResponse);
+        stored.FinishReason.Should().Be(ChatFinishReason.Length);
+        stored.Messages.SelectMany(message => message.Contents)
+            .Should().NotContain(content =>
+                content.GetType() == typeof(FunctionCallContent) ||
+                content.GetType() == typeof(FunctionResultContent));
+        GiftShopChatResponseProjector.ProjectHistory(history)
+            .Last().Text.Should().Be(GiftShopChatResponseProjector.AssistantFallback);
+
+        var activityTypes = await GetScheduledActivityTypesAsync(handle);
+        activityTypes.Count(type => type == GetChatStepActivity).Should().Be(2);
+        activityTypes.Count(type => type == InvokeFunctionActivity).Should().Be(1);
+
+        var next = await chatService.SendMessageAsync("Start again");
+
+        next.AssistantMessage.Should().Be("The next turn starts without incomplete tool protocol.");
+        observedCleanNextTurn.Should().BeTrue();
         A.CallTo(() => cart.AddItemAsync(A<CartItem>._)).MustNotHaveHappened();
 
         await chatService.EndSessionAsync();
@@ -668,6 +742,20 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
                        .OfType<FunctionResultContent>()
                        .Any(result => result.CallId == "search-1");
         return "Here are a few more details.";
+    }
+
+    private static string ObserveIncompleteHistory(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        ref bool observed)
+    {
+        options!.Tools.Should().HaveCount(13);
+        messages.Should().Contain(message =>
+            message.Role == ChatRole.Assistant
+            && message.Text.Contains("did not produce a complete final response"));
+        observed = messages.SelectMany(message => message.Contents)
+            .All(content => content is not FunctionCallContent and not FunctionResultContent);
+        return "The next turn starts without incomplete tool protocol.";
     }
 
     private static string ObserveLoyaltyResult(

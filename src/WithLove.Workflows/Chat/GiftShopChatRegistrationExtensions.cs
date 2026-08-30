@@ -32,7 +32,7 @@ public static class GiftShopChatRegistrationExtensions
 
         foreach (var declaration in GiftShopChatToolCatalog.CreateDeclarations())
         {
-            worker.AddDurableTool<GiftShopChatRequestData, GiftShopChatTurnState>(
+            worker.AddDurableToolFactory<GiftShopChatRequestData, GiftShopChatTurnState>(
                 declaration,
                 (services, context) =>
                     GiftShopChatToolCatalog.CreateActivation(services, context, declaration));
