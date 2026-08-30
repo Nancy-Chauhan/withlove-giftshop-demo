@@ -14,9 +14,23 @@ Run from repo root — Aspire auto-discovers the AppHost (new in Aspire 13.2):
 # Define all parameters once
 aspire secret set "Parameters:openai-api-key" "<your-key>"
 aspire secret set "Parameters:stripe-api-key" "<your-key>"
-aspire secret set "Parameters:stripe-webhook-secret" "<your-key>"
 aspire secret set "Parameters:stripe-public-key" "<your-key>"
 ```
+
+**Do not set `Parameters:stripe-webhook-secret` for local development.** It is a publish/Azure-only
+parameter: `AddParameters` declares it only when `builder.ExecutionContext.IsPublishMode` is true, so
+a local `aspire run` never asks for it. Locally the Stripe CLI container (`AddStripeCliContainer` in
+`ConfigureLocalDependencies`) runs `stripe listen`, which mints a fresh signing secret per session and
+supplies it to Web and the WorkflowServer as `Stripe__Default__WebhookSecret` via `WithReference`.
+A stored local copy would be a credential no local code path reads — and therefore one whose
+corruption first shows up in Azure as a silent Stripe signature mismatch.
+
+For publish/deploy, the value comes from `Parameters__stripe_webhook_secret` in `.secrets.env` (see
+`.secrets.env.example` and `just deploy`). The `validate-stripe-webhook-secret` pipeline step runs
+after `process-parameters` and before any publish work: a value that is empty, whitespace-padded,
+quote-wrapped (straight *or* smart quotes) or missing the `whsec_` prefix fails `aspire publish` /
+`aspire deploy` by name, before any Bicep is written or any Key Vault secret is created. The error
+names the parameter and the expected shape but never echoes the value.
 
 **Useful Aspire CLI commands:**
 
@@ -57,28 +71,33 @@ dotnet build src/WithLove.WorkflowServer
 
 ## Testing
 
-**463 tests. 442 run in CI. 21 run locally only.**
+Three test projects: `WithLove.Web.Tests`, `WithLove.Workflows.Tests`, `WithLove.ProductsAPI.Tests`.
 
-| Project | Tests |
-|---|---|
-| `WithLove.ProductsAPI.Tests` | 148 |
-| `WithLove.Web.Tests` | 198 |
-| `WithLove.Workflows.Tests` | 117 |
+**Test counts are deliberately not recorded here.** They change with every commit that adds a test,
+and a stale count in documentation is worse than no count — it gets cited, trusted, and repeated.
+Ask the tooling instead:
+
+```bash
+# Total, and the CI/local split
+dotnet test WithLoveShop.slnx --no-build --list-tests
+dotnet test WithLoveShop.slnx --no-build --list-tests --filter "RequiresSecrets=true"   # local-only
+dotnet test WithLoveShop.slnx --no-build --list-tests --filter "RequiresSecrets!=true"  # what CI runs
+```
 
 Stack: xUnit + FakeItEasy + FluentAssertions. Prefer a real in-memory `ProductsDbContext` or a real
 `FusionCache` instance over a mock — the cache and EF query layers are self-contained, and faking
 them tests the fake.
 
-### The 21 tests CI cannot run
+### The tests CI cannot run
 
-Six ProductsAPI suites boot the Aspire AppHost. ProductsAPI's startup constructs
+Several ProductsAPI suites boot the Aspire AppHost. ProductsAPI's startup constructs
 `new EmbeddingClient("text-embedding-3-small", openaiKey)` eagerly, and that throws on the
 empty-string fallback — so without a real key the host never becomes ready and every test in those
 classes fails at fixture initialization rather than on an assertion. They are marked
 `[Trait(TestTraits.RequiresSecrets, TestTraits.True)]` at class level:
 
-`DatabaseVerificationTests` (6) · `HealthCheckTests` (3) · `PaginationTests` (4) ·
-`ResponseHeaderTests` (4) · `SearchTests` (4)
+`DatabaseVerificationTests` · `HealthCheckTests` · `PaginationTests` ·
+`ResponseHeaderTests` · `SearchTests`
 
 To run them, set the key once (see the Configuration section) and run the ProductsAPI project on its
 own:
@@ -88,11 +107,11 @@ aspire secret set "Parameters:openai-api-key" "<your-key>"
 dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj
 ```
 
-**A full 463-green run is achievable only on a developer machine with that key set. CI cannot make
-that claim and should not be described as if it does** — `.github/workflows/build.yml` excludes the
+**A fully green run of the whole suite is achievable only on a developer machine with that key set.
+CI cannot make that claim and should not be described as if it does** — `.github/workflows/build.yml` excludes the
 trait with `--filter "...&RequiresSecrets!=true"` and reports the excluded count in the job summary.
 The trait name is a literal contract between `TestTraits.cs` and that workflow; renaming either side
-silently re-enables 21 tests that will then fail the build.
+silently re-enables the secret-dependent tests, which will then fail the build.
 
 Note that `SearchCacheInvalidationTests` is **not** in this set despite living under `Integration/`.
 It fakes the embedding generator and never starts the AppHost, so it runs in CI in ~250 ms.
@@ -138,7 +157,7 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ### Projects
 
-- **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.1.1). Entry point for running the full distributed application locally. Launches and manages all other services.
+- **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.5.3). Entry point for running the full distributed application locally. Launches and manages all other services.
 - **WithLove.ServiceDefaults** — Shared Aspire service defaults library. Configures OpenTelemetry (tracing, metrics, logging), health checks (`/health`, `/alive`), HTTP resilience, and service discovery. Referenced by service projects.
 - **WithLove.Data** — Shared data access layer (class library). Contains EF Core `DbContext` and domain models (`Product`, `Category`) used across multiple services. Enables code reuse and consistent data access patterns across the application.
 - **WithLove.Web** — Blazor Web App host. Serves the storefront with Static SSR plus Interactive Server render modes, hosts the Blazor components, shared web models/services, and the chat/Stripe/loyalty Temporal client code. There is **no** separate `.Client` WebAssembly project.
@@ -148,7 +167,7 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ### Key Dependencies
 
-- **Aspire 13.1.1** — Distributed application orchestration
+- **Aspire 13.5.3** — Distributed application orchestration
 - **Temporal SDK (Temporalio 1.11.1)** — Workflow orchestration via `Temporalio.Extensions.Hosting`; the WorkflowServer reads Temporal connection config from environment variables (`ClientEnvConfig`)
 - **Blazor** — UI with combined Server + WebAssembly interactive rendering
 - **OpenTelemetry 1.15.0** — Observability (configured in ServiceDefaults)

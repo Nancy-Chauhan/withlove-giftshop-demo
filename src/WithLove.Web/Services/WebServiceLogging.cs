@@ -16,6 +16,12 @@ internal static partial class WebServiceLogging
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to ensure loyalty workflow for user {UserId} — continuing anyway")]
     internal static partial void FailedToEnsureLoyaltyWorkflow(this ILogger logger, Exception exception, string userId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to load loyalty profile for user {UserId}; continuing without loyalty data")]
+    internal static partial void FailedToLoadLoyaltyProfile(this ILogger logger, Exception exception, string userId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to load loyalty history for user {UserId}; continuing without loyalty history")]
+    internal static partial void FailedToLoadLoyaltyHistory(this ILogger logger, Exception exception, string userId);
+
     [LoggerMessage(Level = LogLevel.Debug, Message = "Fetching product with ID: {ProductId}")]
     internal static partial void FetchingProduct(this ILogger logger, int productId);
 

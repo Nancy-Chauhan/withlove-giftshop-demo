@@ -5,7 +5,6 @@
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <base href="/"/>
-    
     <ResourcePreloader/>
     
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -93,14 +92,25 @@
     <link rel="stylesheet" href="@Assets["WithLove.Web.styles.css"]"/>
     <ImportMap/>
     <script src="https://js.stripe.com/clover/stripe.js"></script>
-    <HeadOutlet/>
+    <HeadOutlet @rendermode="@PageRenderMode" />
 </head>
 
 <body class="bg-stone-50 text-stone-800 font-body transition-all duration-500 overflow-x-hidden selection:bg-primary selection:text-white">
-<Routes/>
+<Routes @rendermode="@PageRenderMode" />
 <ReconnectModal/>
 <script src="js/checkout-stripe.js"></script>
 <script src="@Assets["_framework/blazor.web.js"]"></script>
 </body>
 
 </html>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    // Interactive routing is the app default. Pages that must write response headers,
+    // such as the Identity login and registration forms, opt out explicitly with
+    // [ExcludeFromInteractiveRouting] and are rendered through a normal HTTP request.
+    private IComponentRenderMode? PageRenderMode
+        => HttpContext.AcceptsInteractiveRouting() ? InteractiveServer : null;
+}

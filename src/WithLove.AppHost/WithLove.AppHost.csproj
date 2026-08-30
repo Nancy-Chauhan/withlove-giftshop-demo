@@ -5,8 +5,18 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <!-- Preserve direct dotnet/IDE AppHost execution; evaluate CLI bundle delegation separately. -->
+        <AspireUseCliBundle>false</AspireUseCliBundle>
+        <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
         <UserSecretsId>909fc674-6133-45e7-86cc-a46a15048bf4</UserSecretsId>
     </PropertyGroup>
+
+    <ItemGroup>
+        <!-- ValidateStripeWebhookSecret is a pure function reached only from a publish-time
+             pipeline step. Booting the AppHost to exercise it would need real secrets, so the
+             test project calls it directly. -->
+        <InternalsVisibleTo Include="WithLove.ProductsAPI.Tests" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\WithLove.ProductsAPI\WithLove.ProductsAPI.csproj" />
@@ -21,7 +31,7 @@
       <PackageReference Include="Aspire.Hosting.Azure.Sql" Version="13.5.3" />
       <PackageReference Include="Aspire.Hosting.Redis" Version="13.5.3" />
       <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.3" />
-      <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlServer.Extensions" Version="13.4.0" />
+      <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlServer.Extensions" Version="13.5.0" />
       <PackageReference Include="Stripe.Hosting.Aspire" Version="0.3.8" />
       <PackageReference Include="TemporalCommunity.Aspire.Hosting" Version="0.4.0" />
       <PackageReference Include="Temporalio" Version="1.17.0" />

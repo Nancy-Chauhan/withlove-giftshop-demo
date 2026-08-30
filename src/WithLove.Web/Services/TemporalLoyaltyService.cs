@@ -49,6 +49,13 @@ public class TemporalLoyaltyService(
             await EnsureWorkflowAsync(userId, ct);
             return new LoyaltyProfile(Balance: 0, LifetimeEarned: 0, Tier: LoyaltyTier.Bronze, PointsToNextTier: 500);
         }
+        catch (RpcException ex)
+        {
+            // Loyalty is supplementary account information. A transient Temporal outage
+            // must not tear down an interactive UI circuit or block checkout.
+            logger.FailedToLoadLoyaltyProfile(ex, userId);
+            return null;
+        }
     }
 
     /// <inheritdoc />
@@ -71,6 +78,11 @@ public class TemporalLoyaltyService(
         catch (RpcException ex) when (ex.Code == RpcException.StatusCode.NotFound)
         {
             await EnsureWorkflowAsync(userId, ct);
+            return [];
+        }
+        catch (RpcException ex)
+        {
+            logger.FailedToLoadLoyaltyHistory(ex, userId);
             return [];
         }
     }

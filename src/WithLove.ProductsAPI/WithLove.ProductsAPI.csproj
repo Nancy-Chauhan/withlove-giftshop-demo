@@ -12,11 +12,11 @@
 
     <ItemGroup>
         <!-- Entity Framework Core -->
-        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
-<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.10" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
+<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
 
         <!-- Aspire Integration -->
-        <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.4.6" />
+        <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.3" />
 
         <!-- OpenAPI & Documentation -->
         <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />

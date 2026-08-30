@@ -26,9 +26,12 @@ Set up secrets using the Aspire CLI (Aspire 13.2+). Run from the repo root — A
 aspire secret set Parameters:openai-api-key "<your-openai-key>"
 aspire secret set Parameters:stripe-api-key "<your-stripe-secret-key>"
 aspire secret set Parameters:stripe-public-key "<your-stripe-public-key>"
-aspire secret set Parameters:stripe-webhook-secret "<whsec_...>"  # printed by stripe listen on first run
 aspire secret set Parameters:redis-password "<local-redis-password>"
 ```
+
+> `Parameters:stripe-webhook-secret` is **not** set locally. The Stripe CLI container runs
+> `stripe listen` and supplies a fresh signing secret each session. It is a publish/Azure-only
+> parameter, sourced from `.secrets.env` — see `docs/azure-deployment.md`.
 
 Verify your secrets are stored:
 
