@@ -1,16 +1,23 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Arize.Aspire.Hosting/Arize.Aspire.Hosting.csproj" />
     <Project Path="src/WithLove.AppHost/WithLove.AppHost.csproj" />
     <Project Path="src/WithLove.Data/WithLove.Data.csproj" />
     <Project Path="src/WithLove.ProductsAPI/WithLove.ProductsAPI.csproj" />
     <Project Path="src/WithLove.ServiceDefaults/WithLove.ServiceDefaults.csproj" />
+    <Project Path="src/WithLove.OpenInference/WithLove.OpenInference.csproj" />
     <Project Path="src/WithLove.Web/WithLove.Web.csproj" />
     <Project Path="src/WithLove.Workflows/WithLove.Workflows.csproj" />
     <Project Path="src/WithLove.WorkflowServer/WithLove.WorkflowServer.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/WithLove.Telemetry.Tests/WithLove.Telemetry.Tests.csproj" />
     <Project Path="tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj" />
     <Project Path="tests/WithLove.Web.Tests/WithLove.Web.Tests.csproj" />
     <Project Path="tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/WithLove.OpenInference.Generator/WithLove.OpenInference.Generator.csproj" />
+    <Project Path="tools/WithLove.Telemetry.Verifier/WithLove.Telemetry.Verifier.csproj" />
   </Folder>
 </Solution>
