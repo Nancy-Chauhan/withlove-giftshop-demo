@@ -9,6 +9,9 @@ using OpenTelemetry.Trace;
 using TemporalCommunity.Extensions.AI;
 using TemporalCommunity.Extensions.AI.Session;
 using Temporalio.Client;
+using WithLove.OpenInference;
+using WithLove.OpenInference.Spans;
+using WithLove.Web.Telemetry;
 using WithLove.Web.Models;
 using WithLove.WorkflowServer.Services;
 using WebChatService = WithLove.Web.Services.ChatService;
@@ -24,6 +27,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
 {
     private const string GetChatStepActivity = "TemporalCommunity.Extensions.AI.GetChatStep";
     private const string InvokeFunctionActivity = "TemporalCommunity.Extensions.AI.InvokeFunction";
+
+    private static TelemetryIdentity CreateTelemetryIdentity() => TelemetryIdentity.Create(
+        Convert.ToBase64String(Enumerable.Range(1, 32).Select(value => (byte)value).ToArray()),
+        "test-v1");
 
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Integration)]
@@ -85,6 +92,112 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
 
         await handle.SignalAsync(workflow => workflow.RequestShutdownAsync());
         await CaptureReplayHistoryIfRequestedAsync(handle);
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Integration)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task TracedUpdate_ConnectsModelAndToolSpansToTheChatTurn()
+    {
+        const string sourceName = "withlove-test-chat-turn";
+        const string operationId = "trace-turn-1";
+        using var source = new ActivitySource(sourceName);
+        var completedActivities = new ConcurrentBag<Activity>();
+        using var tracerProvider = Sdk.CreateTracerProviderBuilder()
+            .AddSource(
+                sourceName,
+                Temporalio.Extensions.OpenTelemetry.TracingInterceptor.ClientSource.Name,
+                Temporalio.Extensions.OpenTelemetry.TracingInterceptor.WorkflowsSource.Name,
+                Temporalio.Extensions.OpenTelemetry.TracingInterceptor.ActivitiesSource.Name)
+            .AddWorkflowServerTracingSources()
+            .AddProcessor(new SimpleActivityExportProcessor(
+                new CollectingActivityExporter(completedActivities)))
+            .Build();
+        var chatClient = new ScriptedGiftShopChatClient((call, _, _) => call switch
+        {
+            1 => ToolCalls(new FunctionCallContent(
+                "search-1",
+                "search_products",
+                new Dictionary<string, object?> { ["query"] = "keepsake" })),
+            2 => Final("I found a keepsake box."),
+            _ => throw new InvalidOperationException($"Unexpected model call {call}."),
+        });
+        var visibleContent = OpenInferenceTraceConfig.Create(new OpenInferenceOptions
+        {
+            HideInputs = false,
+            HideOutputs = false,
+        });
+        await using var harness = await GiftShopChatWorkerHarness.StartAsync(
+            fixture.Environment,
+            chatClient,
+            traceConfig: visibleContent);
+        var targetHost = fixture.Environment.Client.Connection.Options.TargetHost
+            ?? throw new InvalidOperationException("Temporal target host is unavailable.");
+        var caller = await TemporalClient.ConnectAsync(new TemporalClientConnectOptions(targetHost)
+        {
+            Namespace = fixture.Environment.Client.Options.Namespace,
+            DataConverter = DurableAIDataConverter.Instance,
+            Interceptors =
+                [Microsoft.Extensions.Hosting.Extensions.CreateSafeTemporalTracingInterceptor()],
+        });
+        var workflowId = $"giftshop-chat-trace-{Guid.NewGuid():N}";
+        var handle = await caller.StartWorkflowAsync(
+            (GiftShopChatWorkflow workflow) => workflow.RunAsync(harness.WorkflowInput),
+            new WorkflowOptions(workflowId, harness.TaskQueue));
+        completedActivities.Clear();
+
+        Activity chainActivity;
+        using (OpenInferenceContextScope.Push(new OpenInferenceContextValues
+               {
+                   SessionId = "integration-test",
+                   UserId = "safe-user",
+                   Tags = ["withlove", "chat"],
+               }))
+        using (var chain = source.StartChain(
+                   "chat.turn",
+                   "Find a keepsake",
+                   visibleContent))
+        {
+            chain.Activity.Should().NotBeNull();
+            chainActivity = chain.Activity!;
+            chainActivity.SetTag("chat.operation_id", operationId);
+            var request = CreateRequest(operationId, "Find a keepsake");
+
+            var result = await handle.ExecuteUpdateAsync(
+                workflow => workflow.SendMessageAsync(request),
+                new WorkflowUpdateOptions { Id = operationId });
+
+            result.CompletionReason.Should().Be(DurableTurnCompletionReason.FinalResponse);
+            chain.Complete("I found a keepsake box.");
+        }
+
+        tracerProvider.ForceFlush();
+        var turnTrace = completedActivities
+            .Where(activity => activity.TraceId == chainActivity.TraceId)
+            .ToArray();
+        var modelSpans = turnTrace
+            .Where(activity => Equals(activity.GetTagItem("gen_ai.operation.name"), "chat"))
+            .ToArray();
+        var toolSpan = turnTrace.Should().ContainSingle(activity =>
+                Equals(activity.GetTagItem("gen_ai.operation.name"), "execute_tool"))
+            .Subject;
+
+        modelSpans.Should().HaveCount(2);
+        modelSpans.Should().OnlyContain(activity => IsDescendantOf(activity, chainActivity, turnTrace));
+        modelSpans.Should().OnlyContain(activity =>
+            Equals(activity.GetTagItem(OpenInferenceAttributes.SessionId), "integration-test"));
+        toolSpan.OperationName.Should().Be("execute_tool search_products");
+        toolSpan.GetTagItem(OpenInferenceAttributes.OpenInferenceSpanKind).Should().Be("TOOL");
+        toolSpan.GetTagItem(OpenInferenceAttributes.ToolName).Should().Be("search_products");
+        toolSpan.GetTagItem(OpenInferenceAttributes.ToolId).Should().Be("search-1");
+        toolSpan.GetTagItem(OpenInferenceAttributes.SessionId).Should().Be("integration-test");
+        toolSpan.GetTagItem("chat.operation_id").Should().Be(operationId);
+        toolSpan.GetTagItem(OpenInferenceAttributes.InputValue).Should().Be("{\"query\":\"keepsake\"}");
+        toolSpan.GetTagItem(OpenInferenceAttributes.OutputValue)?.ToString()
+            .Should().Contain("Keepsake Box");
+        IsDescendantOf(toolSpan, chainActivity, turnTrace).Should().BeTrue();
+
+        await handle.SignalAsync(workflow => workflow.RequestShutdownAsync());
     }
 
     [Fact]
@@ -242,7 +355,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WorkflowHandleChatClient(handle),
             authentication,
             cart,
-            instrumentation);
+            instrumentation,
+            CreateTelemetryIdentity(),
+            OpenInferenceTraceConfig.Create(
+                new OpenInferenceOptions { HideInputs = false, HideOutputs = false }));
         await chatService.InitializeAsync();
 
         var result = await chatService.SendMessageAsync("Keep adding the keepsake");
@@ -309,7 +425,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WorkflowHandleChatClient(handle),
             authentication,
             cart,
-            instrumentation);
+            instrumentation,
+            CreateTelemetryIdentity(),
+            OpenInferenceTraceConfig.Create(
+                new OpenInferenceOptions { HideInputs = false, HideOutputs = false }));
         await chatService.InitializeAsync();
 
         var incomplete = await chatService.SendMessageAsync("Add the keepsake");
@@ -588,7 +707,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             ChatOptions = new ChatOptions
             {
                 Instructions = GiftShopChatPrompt.BuildInstructions(user),
-            },
+            }.WithChatClientTag("chat.operation_id", operationId),
             Options = new DurableTurnOptions
             {
                 DispatchMode = DurableToolDispatchMode.Sequential,
@@ -831,6 +950,26 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
         await handle.GetResultAsync();
         var history = await handle.FetchHistoryAsync();
         await File.WriteAllTextAsync(outputPath, history.ToJson());
+    }
+
+    private static bool IsDescendantOf(
+        Activity descendant,
+        Activity ancestor,
+        IReadOnlyCollection<Activity> trace)
+    {
+        var spansById = trace.ToDictionary(activity => activity.SpanId);
+        var parentId = descendant.ParentSpanId;
+        while (parentId != default)
+        {
+            if (parentId == ancestor.SpanId)
+                return true;
+            if (!spansById.TryGetValue(parentId, out var parent))
+                return false;
+
+            parentId = parent.ParentSpanId;
+        }
+
+        return false;
     }
 
     private sealed class WorkflowHandleChatClient(

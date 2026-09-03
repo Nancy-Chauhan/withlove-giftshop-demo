@@ -23,6 +23,7 @@
     <ItemGroup>
       <ProjectReference Include="..\WithLove.Data\WithLove.Data.csproj" />
       <ProjectReference Include="..\WithLove.ServiceDefaults\WithLove.ServiceDefaults.csproj" />
+      <ProjectReference Include="..\WithLove.OpenInference\WithLove.OpenInference.csproj" />
       <ProjectReference Include="..\WithLove.Workflows\WithLove.Workflows.csproj" />
     </ItemGroup>
 

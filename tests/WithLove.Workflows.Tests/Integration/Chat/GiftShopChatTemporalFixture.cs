@@ -7,6 +7,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TemporalCommunity.Extensions.AI;
 using Temporalio.Extensions.Hosting;
+using WithLove.OpenInference;
+using WithLove.WorkflowServer.Telemetry;
 
 namespace WithLove.Workflows.Tests.Integration.Chat;
 
@@ -70,14 +72,18 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
         WorkflowEnvironment environment,
         ScriptedGiftShopChatClient chatClient,
         Func<DurableChatWorkflowInput, DurableChatWorkflowInput>? transformInput = null,
-        HttpMessageHandler? productsHandler = null)
+        HttpMessageHandler? productsHandler = null,
+        OpenInferenceTraceConfig? traceConfig = null)
     {
         var targetHost = environment.Client.Connection.Options.TargetHost
             ?? throw new InvalidOperationException("Temporal target host is unavailable.");
         var taskQueue = $"giftshop-chat-test-{Guid.NewGuid():N}";
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddLogging();
-        builder.Services.AddChatClient(chatClient).Build();
+        builder.Services.AddChatClient(
+            new GenAiMessageContentChatClient(
+                chatClient,
+                traceConfig ?? OpenInferenceTraceConfig.Default)).Build();
         builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(
             new NoopEmbeddingGenerator());
         builder.Services.AddHttpClient("productsApi", client =>
@@ -90,7 +96,24 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
                 targetHost,
                 environment.Client.Options.Namespace,
                 taskQueue)
-            .AddGiftShopChatWorker()
+            .ConfigureOptions(options =>
+            {
+                options.ClientOptions ??= new();
+                options.ClientOptions.Interceptors =
+                    [Microsoft.Extensions.Hosting.Extensions.CreateSafeTemporalTracingInterceptor()];
+                options.Interceptors =
+                [
+                    Microsoft.Extensions.Hosting.Extensions.CreateSafeTemporalTracingInterceptor(),
+                    new TemporalUpdateTraceContextInterceptor(),
+                ];
+            })
+            .AddGiftShopChatWorker(
+                (function, metadata) => new OpenInferenceToolFunction(
+                    function,
+                    metadata.ToolCallId,
+                    metadata.ConversationId,
+                    metadata.CorrelationId,
+                    traceConfig ?? OpenInferenceTraceConfig.Default))
             .AddWorkflow<GiftShopSharedWorkerStatusWorkflow>()
             .AddWorkflow<LoyaltyAccountWorkflow>();
 

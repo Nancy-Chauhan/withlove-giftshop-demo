@@ -8,7 +8,9 @@ using Temporalio.Extensions.Hosting;
 using Temporalio.Extensions.OpenTelemetry;
 using Temporalio.Runtime;
 using WithLove.Data;
+using WithLove.OpenInference;
 using WithLove.WorkflowServer.Services;
+using WithLove.WorkflowServer.Telemetry;
 using WithLove.Workflows.Activities;
 using WithLove.Workflows.Chat;
 using WithLove.Workflows.Workflows;
@@ -16,6 +18,7 @@ using WithLove.Workflows.Workflows;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+builder.AddOpenInferenceDefaults();
 
 builder.ConfigureOpenTelemetry()
     .WithTracing(tracing =>
@@ -70,10 +73,13 @@ builder.EnrichSqlServerDbContext<ProductsDbContext>(
 var openaiKey = builder.Configuration.GetValue<string>("OPENAI_API_KEY", string.Empty);
 builder.Services.AddEmbeddingGenerator<string, Embedding<float>>(
     new OpenAI.Embeddings.EmbeddingClient("text-embedding-3-small", openaiKey)
-        .AsIEmbeddingGenerator());
+        .AsIEmbeddingGenerator()
+        .WithOpenTelemetryInstrumentation(Instrumentation.ActivitySourceName));
 
 builder.Services.AddChatClient(
-    new OpenAI.Chat.ChatClient("gpt-5-nano", openaiKey).AsIChatClient())
+    new GenAiMessageContentChatClient(
+        new OpenAI.Chat.ChatClient("gpt-5-nano", openaiKey).AsIChatClient(),
+        OpenInferenceTraceConfig.Default))
     .Build();
 
 builder.Services.AddHttpClient("productsApi", client =>
@@ -110,13 +116,17 @@ var temporalWorker = builder.Services.AddHostedTemporalWorker(
     {
         opts.ClientOptions ??= new();
         opts.ClientOptions.Runtime = temporalRuntime;
-        opts.ClientOptions.Interceptors = [new TracingInterceptor()];
+        opts.ClientOptions.Interceptors = [Extensions.CreateSafeTemporalTracingInterceptor()];
         if (connectOptions.ApiKey is not null)
         {
             opts.ClientOptions.ApiKey = connectOptions.ApiKey;
             opts.ClientOptions.Tls = connectOptions.Tls; // TlsOptions; null is fine — SDK auto-enables TLS when ApiKey is set
         }
-        opts.Interceptors = [new TracingInterceptor()];
+        opts.Interceptors =
+        [
+            Extensions.CreateSafeTemporalTracingInterceptor(),
+            new TemporalUpdateTraceContextInterceptor(),
+        ];
     })
     .AddScopedActivities<DatabaseActivities>()
     .AddScopedActivities<CustomerOnboardingActivities>()
@@ -127,7 +137,13 @@ var temporalWorker = builder.Services.AddHostedTemporalWorker(
     .AddWorkflow<StripeCheckoutOrderWorkflow>()
     .AddWorkflow<LoyaltyAccountWorkflow>();
 
-temporalWorker.AddGiftShopChatWorker();
+temporalWorker.AddGiftShopChatWorker(
+    (function, metadata) => new OpenInferenceToolFunction(
+        function,
+        metadata.ToolCallId,
+        metadata.ConversationId,
+        metadata.CorrelationId,
+        OpenInferenceTraceConfig.Default));
 
 builder.Services.AddHostedService<DatabaseSetupHostedService>();
 

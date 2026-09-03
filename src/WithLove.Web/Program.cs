@@ -20,34 +20,44 @@ using WithLove.Web;
 using WithLove.Web.Components;
 using TemporalCommunity.Extensions.AI;
 using WithLove.Workflows.Chat;
+using WithLove.OpenInference;
 using ZiggyCreatures.Caching.Fusion;
 using ZiggyCreatures.Caching.Fusion.Backplane.StackExchangeRedis;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+builder.AddOpenInferenceDefaults();
 
-builder.ConfigureOpenTelemetry()
+builder.ConfigureOpenTelemetry(aspNetCoreTracing =>
+{
+    // Blazor Interactive Server emits a root span for nearly every SignalR hub call and
+    // component event. Keep normal HTTP request tracing, but exclude that high-volume UI noise.
+    aspNetCoreTracing.EnableAspNetCoreSignalRSupport = false;
+    aspNetCoreTracing.EnableRazorComponentsSupport = false;
+})
     .WithTracing(tracing =>
     {
         tracing.AddSource(Instrumentation.ActivitySourceName);
         tracing.AddSource(TracingInterceptor.ClientSource.Name);
-        tracing.AddFusionCacheInstrumentation(opts =>
-        {
-            opts.IncludeMemoryLevel = true;
-            opts.IncludeDistributedLevel = true;
-            opts.IncludeBackplane = true;
-        });
+        // FusionCache telemetry is intentionally disabled to keep cache operations out of traces.
+        // tracing.AddFusionCacheInstrumentation(opts =>
+        // {
+        //     opts.IncludeMemoryLevel = true;
+        //     opts.IncludeDistributedLevel = true;
+        //     opts.IncludeBackplane = true;
+        // });
     })
     .WithMetrics(metrics =>
     {
         metrics.AddMeter(Instrumentation.ActivitySourceName);
-        metrics.AddFusionCacheInstrumentation(opts =>
-        {
-            opts.IncludeMemoryLevel = true;
-            opts.IncludeDistributedLevel = true;
-            opts.IncludeBackplane = true;
-        });
+        // FusionCache telemetry is intentionally disabled to keep cache measurements out of metrics.
+        // metrics.AddFusionCacheInstrumentation(opts =>
+        // {
+        //     opts.IncludeMemoryLevel = true;
+        //     opts.IncludeDistributedLevel = true;
+        //     opts.IncludeBackplane = true;
+        // });
     });
 
 builder.AddDefaultHealthChecks();
@@ -175,6 +185,8 @@ builder.Services.AddScoped(sp =>
 builder.Services.AddScoped<IOrderService, StripeOrderService>();
 
 builder.Services.AddScoped<ChatService>();
+builder.Services.AddSingleton(OpenInferenceTraceConfig.Default);
+builder.Services.AddSingleton(TelemetryIdentityFactory.Create(builder.Environment, builder.Configuration));
 builder.Services.AddScoped<IGiftShopChatWorkflowClient, GiftShopChatWorkflowClient>();
 
 builder.Services.AddScoped<ILoyaltyService, TemporalLoyaltyService>();
@@ -184,7 +196,7 @@ builder.Services.AddTemporalClient(opts =>
 {
     opts.TargetHost = connectOptions.TargetHost;
     opts.Namespace = connectOptions.Namespace;
-    opts.Interceptors = [new TracingInterceptor()];
+    opts.Interceptors = [Extensions.CreateSafeTemporalTracingInterceptor()];
     if (connectOptions.ApiKey is not null)
     {
         opts.ApiKey = connectOptions.ApiKey;

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using TemporalCommunity.Extensions.AI;
 using Temporalio.Common;
@@ -24,7 +25,8 @@ public static class GiftShopChatRegistrationExtensions
     }
 
     public static ITemporalWorkerServiceOptionsBuilder AddGiftShopChatWorker(
-        this ITemporalWorkerServiceOptionsBuilder worker)
+        this ITemporalWorkerServiceOptionsBuilder worker,
+        Func<AIFunction, DurableToolInvocationMetadata, AIFunction>? decorateTool = null)
     {
         worker.Services.AddScoped<GiftShopChatToolService>();
         worker.AddDurableAI(ConfigureDurableExecution)
@@ -35,7 +37,20 @@ public static class GiftShopChatRegistrationExtensions
             worker.AddDurableToolFactory<GiftShopChatRequestData, GiftShopChatTurnState>(
                 declaration,
                 (services, context) =>
-                    GiftShopChatToolCatalog.CreateActivation(services, context, declaration));
+                {
+                    var activation = GiftShopChatToolCatalog.CreateActivation(
+                        services,
+                        context,
+                        declaration);
+                    if (decorateTool is null)
+                        return activation;
+
+                    return new DurableToolActivation<GiftShopChatTurnState>
+                    {
+                        Function = decorateTool(activation.Function, context.Metadata),
+                        CompleteState = activation.CompleteState,
+                    };
+                });
         }
 
         return worker;

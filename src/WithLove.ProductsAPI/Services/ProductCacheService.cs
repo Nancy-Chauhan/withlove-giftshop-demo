@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Data.SqlTypes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using WithLove.Data;
 using WithLove.Data.Models;
 using WithLove.ProductsAPI.DTOs;
+using WithLove.OpenInference;
+using WithLove.OpenInference.Spans;
 using ZiggyCreatures.Caching.Fusion;
 
 namespace WithLove.ProductsAPI.Services;
@@ -16,6 +19,13 @@ namespace WithLove.ProductsAPI.Services;
 /// </summary>
 public partial class ProductCacheService : IProductCacheService
 {
+    private static readonly OpenInferenceTraceConfig SearchTraceConfig =
+        OpenInferenceTraceConfig.Create(new OpenInferenceOptions
+        {
+            HideInputs = true,
+            HideOutputs = true,
+        });
+
     private readonly ProductsDbContext _dbContext;
     private readonly IFusionCache _cache;
     private readonly ILogger<ProductCacheService> _logger;
@@ -245,7 +255,13 @@ public partial class ProductCacheService : IProductCacheService
         if (pageNumber < 1) pageNumber = 1;
         if (pageSize < 1) pageSize = 10;
 
-        using var activity = _instrumentation.ActivitySource.StartActivity("product.search");
+        // This method is the FusionCache factory, so a RETRIEVER created here means a real
+        // backend retrieval occurred. Cache hits never enter this method and emit no fake work.
+        using var retriever = _instrumentation.ActivitySource.StartRetriever(
+            "product.search",
+            query,
+            SearchTraceConfig);
+        var activity = retriever.Activity;
 
         List<(int ProductId, int Rank)> ftsResults;
         var ftsUsedFallback = false;
@@ -323,11 +339,21 @@ public partial class ProductCacheService : IProductCacheService
         _instrumentation.SearchResultCount.Record(rankedIds.Count);
 
         var total = rankedIds.Count;
-
         var pageIds = rankedIds
             .Skip(Math.Max(0, (pageNumber - 1) * pageSize))
             .Take(Math.Max(1, pageSize))
             .ToList();
+
+        // OpenInference has no generic relevance-score definition. Final rank position is not the
+        // RRF score, so export only the IDs actually returned on this page. Avoid building the
+        // flattened document projection when the sampler requested propagation only.
+        if (retriever.IsRecording)
+        {
+            retriever.Record(pageIds
+                .Select(id => new RetrievedDocument(
+                    id: id.ToString(CultureInfo.InvariantCulture)))
+                .ToArray());
+        }
 
         if (pageIds.Count == 0)
             return new CachedPage<Product>([], total);

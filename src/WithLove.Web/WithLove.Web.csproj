@@ -24,6 +24,7 @@
         <PackageReference Include="ZiggyCreatures.FusionCache.OpenTelemetry" Version="2.6.0" />
         <PackageReference Include="ZiggyCreatures.FusionCache.Serialization.SystemTextJson" Version="2.6.0" />
         <ProjectReference Include="..\WithLove.Data\WithLove.Data.csproj" />
+        <ProjectReference Include="..\WithLove.OpenInference\WithLove.OpenInference.csproj" />
         <ProjectReference Include="..\WithLove.ServiceDefaults\WithLove.ServiceDefaults.csproj" />
         <ProjectReference Include="..\WithLove.Workflows\WithLove.Workflows.csproj" />
     </ItemGroup>

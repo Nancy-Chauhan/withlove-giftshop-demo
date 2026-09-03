@@ -4,13 +4,19 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.AI;
 using TemporalCommunity.Extensions.AI;
 using WithLove.Web.Models;
+using WithLove.OpenInference;
+using WithLove.OpenInference.Spans;
+using WithLove.Web.Telemetry;
 using WithLove.Workflows.Chat;
 using WithLove.Workflows.Workflows;
 
 namespace WithLove.Web.Services;
 
 /// <summary>Result from SendMessageAsync containing the response and any navigation requests.</summary>
-public record ChatMessageResult(string AssistantMessage, List<NavigationAction> NavigationActions);
+public record ChatMessageResult(
+    string AssistantMessage,
+    List<NavigationAction> NavigationActions,
+    string OperationId);
 
 /// <summary>
 /// Scoped service (one per SignalR circuit) that bridges Blazor UI with the Temporal chat workflow.
@@ -19,13 +25,17 @@ public class ChatService(
     IGiftShopChatWorkflowClient workflowClient,
     AuthenticationStateProvider authStateProvider,
     ICartService cartService,
-    Instrumentation instrumentation)
+    Instrumentation instrumentation,
+    TelemetryIdentity telemetryIdentity,
+    OpenInferenceTraceConfig openInferenceTraceConfig)
 {
     private const int MaxOutputTokens = 4000;
 
     private string? _workflowId;
     private bool _initialized;
     private UserContext? _userContext;
+    private string? _sessionTelemetryId;
+    private string? _userTelemetryId;
 
     /// <summary>Chat messages for UI rendering.</summary>
     public List<ChatHistoryEntry> Messages { get; } = [];
@@ -51,6 +61,8 @@ public class ChatService(
         _workflowId = userId is not null
             ? GiftShopChatWorkflow.WorkflowIdFor(userId)
             : GiftShopChatWorkflow.WorkflowIdFor($"anon-{Guid.NewGuid():N}");
+        _sessionTelemetryId = telemetryIdentity.ForSession(_workflowId);
+        _userTelemetryId = userId is null ? null : telemetryIdentity.ForUser(userId);
 
         var name = auth.User.FindFirst(ClaimTypes.Name)?.Value
                    ?? auth.User.FindFirst(ClaimTypes.GivenName)?.Value;
@@ -75,6 +87,8 @@ public class ChatService(
     {
         if (_workflowId is null)
             throw new InvalidOperationException("Call InitializeAsync first.");
+        if (_sessionTelemetryId is null)
+            throw new InvalidOperationException("Telemetry identity was not initialized.");
 
         await workflowClient.EnsureStartedAsync(_workflowId);
     }
@@ -115,7 +129,17 @@ public class ChatService(
         var completion = "Failed";
         UsageDetails? usage = null;
         var stopwatch = Stopwatch.StartNew();
-        using var activity = instrumentation.ActivitySource.StartActivity("chat.turn");
+        using var context = OpenInferenceContextScope.Push(new OpenInferenceContextValues
+        {
+            SessionId = _sessionTelemetryId,
+            UserId = _userTelemetryId,
+            Tags = ["withlove", "chat"],
+        });
+        using var chain = instrumentation.ActivitySource.StartChain(
+            "chat.turn",
+            message,
+            openInferenceTraceConfig);
+        var activity = chain.Activity;
         activity?.SetTag("chat.operation_id", operationId);
 
         try
@@ -136,7 +160,9 @@ public class ChatService(
                 RequestData = new GiftShopChatRequestData(operationId, _userContext),
                 InitialTurnState = GiftShopChatTurnState.Create(cartSnapshot),
                 CorrelationId = operationId,
-                ConversationId = _workflowId,
+                // This value becomes conversation.id on durable-AI spans. It must be the safe
+                // session pseudonym; the raw workflow ID remains exclusively the Temporal route.
+                ConversationId = _sessionTelemetryId,
                 ChatOptions = new ChatOptions
                 {
                     Instructions = GiftShopChatPrompt.BuildInstructions(_userContext),
@@ -156,7 +182,7 @@ public class ChatService(
                         Effort = ReasoningEffort.Low,
                         Output = ReasoningOutput.None,
                     },
-                },
+                }.WithChatClientTag("chat.operation_id", operationId),
                 Options = new DurableTurnOptions
                 {
                     DispatchMode = DurableToolDispatchMode.Sequential,
@@ -190,7 +216,14 @@ public class ChatService(
             }
 
             completion = result.CompletionReason.ToString();
-            return new ChatMessageResult(assistantMessage, navigationActions);
+            chain.Complete(assistantMessage);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return new ChatMessageResult(assistantMessage, navigationActions, operationId);
+        }
+        catch (Exception exception)
+        {
+            chain.Fail(exception, escaped: true);
+            throw;
         }
         finally
         {
@@ -261,6 +294,8 @@ public class ChatService(
 
         Messages.Clear();
         _workflowId = null;
+        _sessionTelemetryId = null;
+        _userTelemetryId = null;
         _userContext = null;
         _initialized = false;
     }

@@ -6,12 +6,21 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.AI;
 using TemporalCommunity.Extensions.AI;
 using TemporalCommunity.Extensions.AI.Session;
+using WithLove.OpenInference;
+using WithLove.Web.Telemetry;
 using WithLove.Workflows.Chat;
+using WithLove.Workflows.Workflows;
 
 namespace WithLove.Web.Tests.Unit.Services;
 
 public class ChatServiceTests : IDisposable
 {
+    private static readonly OpenInferenceTraceConfig VisibleContent = OpenInferenceTraceConfig.Create(
+        new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
+        _ => null);
+    private static readonly TelemetryIdentity TestTelemetryIdentity = TelemetryIdentity.Create(
+        Convert.ToBase64String(Enumerable.Range(1, 32).Select(value => (byte)value).ToArray()),
+        "test-v1");
     private readonly IGiftShopChatWorkflowClient _workflowClient =
         A.Fake<IGiftShopChatWorkflowClient>();
     private readonly AuthenticationStateProvider _authentication =
@@ -61,18 +70,60 @@ public class ChatServiceTests : IDisposable
         capturedRequest.Should().NotBeNull();
         capturedRequest!.RequestData.OperationId.Should().Be(capturedUpdateId);
         capturedRequest.CorrelationId.Should().Be(capturedUpdateId);
-        capturedRequest.ConversationId.Should().Be(capturedWorkflowId);
+        capturedRequest.ConversationId.Should().StartWith("hmac-test-v1-");
+        capturedRequest.ConversationId.Should().NotContain(capturedWorkflowId!);
         capturedRequest.Messages.Should().ContainSingle();
         capturedRequest.Messages[0].Role.Should().Be(ChatRole.User);
         capturedRequest.Messages[0].Text.Should().Be("Add the keepsake");
         capturedRequest.Options.DispatchMode.Should().Be(DurableToolDispatchMode.Sequential);
         capturedRequest.ChatOptions!.Tools.Should().BeNull();
+        capturedRequest.ChatOptions.AdditionalProperties.Should().ContainKey(
+            $"{TemporalChatOptionsExtensions.ChatClientTagsKeyPrefix}chat.operation_id")
+            .WhoseValue.Should().Be(capturedUpdateId);
         capturedRequest.InitialTurnState!.CartActions.Should().BeEmpty();
         capturedRequest.InitialTurnState.NavigationActions.Should().BeEmpty();
         result.AssistantMessage.Should().Be("Added it for you.");
+        result.OperationId.Should().Be(capturedUpdateId);
         result.NavigationActions.Should().ContainSingle(action => action.Url == "/cart");
         A.CallTo(() => _cart.AddItemAsync(A<CartItem>.That.Matches(item => item.ProductId == 7)))
             .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_ExportsOnlyPseudonymousIdentityAndRoutesWithRawWorkflowId()
+    {
+        const string rawUserId = "raw-authenticated-user-123";
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, rawUserId)],
+            authenticationType: "test"));
+        A.CallTo(() => _authentication.GetAuthenticationStateAsync())
+            .Returns(new AuthenticationState(principal));
+        string? routedWorkflowId = null;
+        DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>? capturedRequest = null;
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Invokes((string workflowId, string _,
+                DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState> request) =>
+            {
+                routedWorkflowId = workflowId;
+                capturedRequest = request;
+            })
+            .Returns(FinalResult("Done.", GiftShopChatTurnState.Create([])));
+        var service = CreateService();
+        await service.InitializeAsync();
+        using var telemetry = new ChatTurnTelemetryCapture(_instrumentation);
+
+        var result = await service.SendMessageAsync("private prompt");
+
+        routedWorkflowId.Should().Be(GiftShopChatWorkflow.WorkflowIdFor(rawUserId));
+        capturedRequest!.ConversationId.Should().StartWith("hmac-test-v1-");
+        capturedRequest.ConversationId.Should().NotContain(rawUserId);
+        result.OperationId.Should().NotBeNullOrWhiteSpace();
+        telemetry.ShouldContainOnlySafeIdentity(rawUserId, routedWorkflowId!);
     }
 
     [Fact]
@@ -244,7 +295,11 @@ public class ChatServiceTests : IDisposable
 
         await service.SendMessageAsync("Finish");
 
-        telemetry.ShouldHaveRecorded("FinalResponse", ActivityStatusCode.Unset);
+        telemetry.ShouldHaveRecorded(
+            "FinalResponse",
+            ActivityStatusCode.Ok,
+            expectedInput: "Finish",
+            expectedOutput: "Done.");
     }
 
     [Fact]
@@ -270,7 +325,11 @@ public class ChatServiceTests : IDisposable
 
         await service.SendMessageAsync("Keep trying");
 
-        telemetry.ShouldHaveRecorded("IterationLimitReached", ActivityStatusCode.Unset);
+        telemetry.ShouldHaveRecorded(
+            "IterationLimitReached",
+            ActivityStatusCode.Ok,
+            expectedInput: "Keep trying",
+            expectedOutput: GiftShopChatResponseProjector.IterationLimitMessage);
     }
 
     [Fact]
@@ -297,7 +356,11 @@ public class ChatServiceTests : IDisposable
 
         await service.SendMessageAsync("Try again");
 
-        telemetry.ShouldHaveRecorded("IncompleteResponse", ActivityStatusCode.Unset);
+        telemetry.ShouldHaveRecorded(
+            "IncompleteResponse",
+            ActivityStatusCode.Ok,
+            expectedInput: "Try again",
+            expectedOutput: GiftShopChatResponseProjector.AssistantFallback);
     }
 
     [Fact]
@@ -317,7 +380,10 @@ public class ChatServiceTests : IDisposable
         Func<Task> send = () => service.SendMessageAsync("Fail");
 
         await send.Should().ThrowAsync<InvalidOperationException>();
-        telemetry.ShouldHaveRecorded("Failed", ActivityStatusCode.Error);
+        telemetry.ShouldHaveRecorded(
+            "Failed",
+            ActivityStatusCode.Error,
+            expectedInput: "Fail");
     }
 
     [Fact]
@@ -483,7 +549,13 @@ public class ChatServiceTests : IDisposable
             "Hmm, something went sideways on my end. Mind trying that again?");
 
     private ChatService CreateService() =>
-        new(_workflowClient, _authentication, _cart, _instrumentation);
+        new(
+            _workflowClient,
+            _authentication,
+            _cart,
+            _instrumentation,
+            TestTelemetryIdentity,
+            VisibleContent);
 
     private static DurableTurnResult<GiftShopChatTurnState> FinalResult(
         string assistantMessage,
@@ -535,13 +607,45 @@ public class ChatServiceTests : IDisposable
             _meterListener.Start();
         }
 
-        public void ShouldHaveRecorded(string completionReason, ActivityStatusCode status)
+        public void ShouldHaveRecorded(
+            string completionReason,
+            ActivityStatusCode status,
+            string? expectedInput = null,
+            string? expectedOutput = null)
         {
             _activities.Should().ContainSingle();
             var activity = _activities.Single();
             activity.GetTagItem("chat.completion_reason").Should().Be(completionReason);
             activity.Status.Should().Be(status);
+            if (expectedInput is not null)
+            {
+                activity.GetTagItem(OpenInferenceAttributes.InputValue).Should().Be(expectedInput);
+                activity.GetTagItem(OpenInferenceAttributes.InputMimeType).Should().Be("text/plain");
+            }
+            if (expectedOutput is not null)
+            {
+                activity.GetTagItem(OpenInferenceAttributes.OutputValue).Should().Be(expectedOutput);
+                activity.GetTagItem(OpenInferenceAttributes.OutputMimeType).Should().Be("text/plain");
+            }
+            else
+            {
+                activity.GetTagItem(OpenInferenceAttributes.OutputValue).Should().BeNull();
+            }
             _histogramReasons.Should().ContainSingle().Which.Should().Be(completionReason);
+        }
+
+        public void ShouldContainOnlySafeIdentity(params string[] rawIdentifiers)
+        {
+            var activity = _activities.Should().ContainSingle().Subject;
+            activity.GetTagItem(OpenInferenceAttributes.OpenInferenceSpanKind).Should().Be("CHAIN");
+            activity.GetTagItem(OpenInferenceAttributes.SessionId).Should().BeOfType<string>()
+                .Which.Should().StartWith("hmac-test-v1-");
+            activity.GetTagItem(OpenInferenceAttributes.UserId).Should().BeOfType<string>()
+                .Which.Should().StartWith("hmac-test-v1-");
+            var exportedText = string.Join('\n', activity.TagObjects.Select(tag => $"{tag.Key}={tag.Value}"));
+            foreach (var rawIdentifier in rawIdentifiers)
+                exportedText.Should().NotContain(rawIdentifier);
+            activity.TagObjects.Should().NotContain(tag => tag.Key == "temporalWorkflowID");
         }
 
         public void Dispose()

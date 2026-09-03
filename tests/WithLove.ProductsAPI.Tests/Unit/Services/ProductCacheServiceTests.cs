@@ -1,5 +1,6 @@
 namespace WithLove.ProductsAPI.Tests.Unit.Services;
 
+using System.Diagnostics;
 using FakeItEasy;
 using MockQueryable.FakeItEasy;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +8,8 @@ using Microsoft.Extensions.AI;
 using WithLove.Data;
 using WithLove.Data.Models;
 using WithLove.ProductsAPI.Services;
+using WithLove.OpenInference;
+using WithLove.OpenInference.Spans;
 using ZiggyCreatures.Caching.Fusion;
 
 /// <summary>
@@ -285,6 +288,108 @@ public class ProductCacheServiceTests
         // Assert
         products.Should().NotBeEmpty();
         products.Should().AllSatisfy(p => p.Name.ToLower().Should().Contain(query.ToLower()));
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Caching)]
+    public async Task SearchProductsAsync_EmitsOneRetrieverOnMissAndNoneOnCacheHit()
+    {
+        var query = $"Product-{Guid.NewGuid():N}";
+        var products = new List<Product>
+        {
+            new() { Id = 91, Name = query, Description = query, IsEnabled = true, RowVersion = [1] },
+        };
+        A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var service = CreateService();
+
+        await service.SearchProductsAsync(query);
+        await service.SearchProductsAsync(query);
+
+        stopped.Should().ContainSingle();
+        stopped[0].GetTagItem(OpenInferenceAttributes.OpenInferenceSpanKind).Should().Be("RETRIEVER");
+        stopped[0].GetTagItem(OpenInferenceAttributes.InputValue)
+            .Should().Be(OpenInferenceTraceConfig.RedactedValue);
+        stopped[0].GetTagItem("retrieval.documents.0.document.content").Should().BeNull();
+        stopped[0].GetTagItem("retrieval.documents.0.document.score").Should().BeNull();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Caching)]
+    public async Task SearchProductsAsync_BoundsRetrieverDocumentsToReturnedPageAndOmitsScores()
+    {
+        var query = $"Bounded-{Guid.NewGuid():N}";
+        var products = Enumerable.Range(1, 4)
+            .Select(index => new Product
+            {
+                Id = 200 + index,
+                Name = $"{query}-{index}",
+                Description = query,
+                IsEnabled = true,
+                RowVersion = [(byte)index],
+            })
+            .ToList();
+        A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stopped.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var service = CreateService();
+
+        await service.SearchProductsAsync(query, pageNumber: 1, pageSize: 2);
+
+        var retriever = stopped.Should().ContainSingle().Subject;
+        retriever.GetTagItem("retrieval.documents.0.document.id").Should().NotBeNull();
+        retriever.GetTagItem("retrieval.documents.1.document.id").Should().NotBeNull();
+        retriever.TagObjects.Should().NotContain(tag =>
+            tag.Key.StartsWith("retrieval.documents.2.", StringComparison.Ordinal));
+        retriever.TagObjects.Should().NotContain(tag =>
+            tag.Key.EndsWith(".document.score", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Caching)]
+    public async Task SearchProductsAsync_PropagationOnlySpanDoesNotProjectRetrieverDocuments()
+    {
+        var query = $"Propagation-{Guid.NewGuid():N}";
+        var products = new List<Product>
+        {
+            new() { Id = 301, Name = query, Description = query, IsEnabled = true, RowVersion = [1] },
+        };
+        A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
+        var stopped = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.PropagationData,
+            ActivityStopped = stopped.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var service = CreateService();
+
+        await service.SearchProductsAsync(query);
+
+        var retriever = stopped.Should().ContainSingle().Subject;
+        retriever.IsAllDataRequested.Should().BeFalse();
+        retriever.TagObjects.Should().NotContain(tag =>
+            tag.Key.StartsWith("retrieval.documents.", StringComparison.Ordinal));
     }
 
     [Fact]
