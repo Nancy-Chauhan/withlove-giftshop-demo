@@ -29,6 +29,19 @@ aspire secret set Parameters:stripe-public-key "<your-stripe-public-key>"
 aspire secret set Parameters:redis-password "<local-redis-password>"
 ```
 
+Local runs use Phoenix for traces by default. To send traces to Arize AX instead, store the AX
+connection values without committing them and select AX for that AppHost run:
+
+```bash
+aspire secret set ARIZE_OTLP_ENDPOINT "<endpoint-from-the-AX-connect-page>"
+aspire secret set ARIZE_API_KEY "<your-AX-api-key>"
+aspire secret set ARIZE_SPACE_ID "<your-AX-space-id>"
+Arize__TraceDestination=Ax aspire start
+```
+
+The configured AX endpoint determines the region; the application does not assume one. Traces go
+to the selected Arize backend while logs and metrics continue to go to the Aspire dashboard.
+
 > `Parameters:stripe-webhook-secret` is **not** set locally. The Stripe CLI container runs
 > `stripe listen` and supplies a fresh signing secret each session. It is a publish/Azure-only
 > parameter, sourced from `.secrets.env` — see `docs/azure-deployment.md`.
@@ -46,6 +59,12 @@ aspire secret get Parameters:openai-api-key
 ```
 
 The AppHost injects these values into the appropriate projects.
+
+The Web app uses a committed demo-only telemetry identity key when its environment is Development,
+so no local telemetry secret setup is required. The public key prevents raw identifiers from
+appearing directly in traces but is not production-grade pseudonymization. Every non-Development
+environment requires a private, stable `telemetry-identity-key`; Azure receives it through the
+deployment parameter and Key Vault flow.
 
 ## Running Locally
 
@@ -78,6 +97,10 @@ Opening Aspire dashboard should show:
 - **DbGate** — SQL Server browser
 - **Stripe CLI** — local webhook forwarding
 - **Temporal Server** — local dev server
+- **Arize Phoenix** — local OpenInference trace analysis; logs and metrics stay in the Aspire dashboard
+
+Select AX as described above when you want the same OpenInference traces sent to Arize AX instead
+of running Phoenix.
 
 To stop, press `Ctrl+C` in the terminal.
 
@@ -104,6 +127,9 @@ The application uses Temporal for durable, long-lived operations:
 
 See [Durable AI chat architecture](docs/temporal-ai-chat.md) for registration, state, retries,
 payload disclosure, observability, and troubleshooting details.
+
+See [Telemetry architecture](docs/telemetry.md) for the MEAI/OpenInference span model, exporter
+routing, trace-identity guarantee, and the local-versus-deployment behavior.
 
 ## Tests
 

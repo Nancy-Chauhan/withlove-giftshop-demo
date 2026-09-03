@@ -79,6 +79,10 @@ Collect the following values before running Step 3:
 | Parameter | Where to find it |
 |---|---|
 | `openai-api-key` | OpenAI dashboard → API keys |
+| `ARIZE_OTLP_ENDPOINT` | The regional OTLP endpoint shown by the Arize AX connect page; no region is assumed by the application |
+| `ARIZE_API_KEY` | Arize AX → Settings → API Keys; use a scoped service key |
+| `ARIZE_SPACE_ID` | The base64 space ID used for OTLP ingestion, not the human-readable space name |
+| `telemetry-identity-key` | Deployment-only secret: generate once with `openssl rand -base64 32`; never use the committed local demo key; keep it stable to preserve trace grouping |
 | `redis-password` | Generate once with `openssl rand -hex 24`; keep it stable across deploys |
 | `stripe-api-key` | Stripe Dashboard → Developers → API keys → Secret key |
 | `stripe-public-key` | Stripe Dashboard → Developers → API keys → Publishable key |
@@ -88,6 +92,11 @@ Collect the following values before running Step 3:
 | `stripe-webhook-secret` | Enter `whsec_placeholder` for now — replaced in Step 5 |
 
 > **Note:** `aspire secret set` stores values in the AppHost's local dev user secrets for `aspire run`. Those values are not read by `aspire deploy`. Use the interactive prompts (Step 3) or environment variables (see CI deploy section) to supply values to the deploy pipeline.
+
+Published applications default to Arize AX for traces. The AX resource is external and excluded
+from the deployment manifest; its endpoint, API key, and space ID remain deferred deployment
+parameters. Logs and metrics continue to use Aspire's OTLP configuration, and AX headers are
+attached only to the AX trace exporter.
 
 ## Step 2 — Register Temporal Cloud search attributes (one-time)
 
@@ -220,7 +229,13 @@ If CI supplies environment variables directly instead of creating `.secrets.env`
 just deploy
 ```
 
-**All other secrets:** Replace the corresponding value in `.secrets.env`, then deploy. Key Vault secrets are picked up by Container Apps within approximately 30 minutes automatically — a forced restart is not required for non-critical rotations.
+**Arize AX credentials:** Replace `ARIZE_API_KEY`, `ARIZE_SPACE_ID`, or `ARIZE_OTLP_ENDPOINT` in
+`.secrets.env`, then deploy. These are Aspire parameter-backed application settings rather than Key
+Vault references, so an AX credential or destination change requires a new application revision.
+
+**Other Key Vault-backed secrets:** Replace the corresponding value in `.secrets.env`, then deploy.
+Key Vault secrets are picked up by Container Apps within approximately 30 minutes automatically —
+a forced restart is not required for non-critical rotations.
 
 ```bash
 just deploy
