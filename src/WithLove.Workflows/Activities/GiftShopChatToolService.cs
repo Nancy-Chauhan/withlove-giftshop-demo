@@ -253,8 +253,10 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
 
         if (!detailed)
         {
+            var shortDescription = LimitDescription(description);
             return $"- ID: {id} | {name} | ${price:F2} | {category}" +
                    (string.IsNullOrEmpty(subCategory) ? string.Empty : $" > {subCategory}") +
+                   (string.IsNullOrEmpty(shortDescription) ? string.Empty : $" | Description: {shortDescription}") +
                    (string.IsNullOrEmpty(imageUrl) ? string.Empty : $" | Image: {imageUrl}");
         }
 
@@ -291,6 +293,16 @@ internal sealed class GiftShopChatToolService(IHttpClientFactory httpClientFacto
         }
 
         return string.Join("\n", lines);
+    }
+
+    private static string LimitDescription(string description)
+    {
+        const int maxLength = 180;
+        if (description.Length <= maxLength)
+            return description;
+
+        var cutoff = description[..maxLength].LastIndexOf(' ');
+        return $"{description[..(cutoff > 0 ? cutoff : maxLength)].TrimEnd()}…";
     }
 
     internal static string SummarizeCategoryList(string json)

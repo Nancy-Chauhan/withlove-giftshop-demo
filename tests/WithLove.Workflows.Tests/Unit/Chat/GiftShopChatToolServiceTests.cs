@@ -23,6 +23,7 @@ public class GiftShopChatToolServiceTests
         handler.PathAndQuery.Should().Be("/api/products/search?q=keepsake&top=4");
         result.Split('\n').Should().HaveCount(GiftShopChatToolService.MaxSearchProductMatches);
         result.Should().Contain("Product 4");
+        result.Should().Contain("Description: A thoughtful gift 4");
         result.Should().NotContain("Product 5");
     }
 
@@ -38,7 +39,7 @@ public class GiftShopChatToolServiceTests
             var products = string.Join(
                 ",",
                 Enumerable.Range(1, 5).Select(id =>
-                    $$"""{"id":{{id}},"name":"Product {{id}}","price":{{id}}.00}"""));
+                    $$"""{"id":{{id}},"name":"Product {{id}}","price":{{id}}.00,"description":"A thoughtful gift {{id}}"}"""));
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(

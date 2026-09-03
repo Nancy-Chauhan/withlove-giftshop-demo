@@ -26,7 +26,8 @@ public static class GiftShopChatPrompt
         - If they ask about their cart, use view_cart to check — never guess what is in it
         - Refer to product collections (not categories) in conversation
         - Prices are in USD
-        - When showing product images, use markdown image syntax: ![Product Name](imageUrl)
+        - When recommending products, include the product name, USD price, one short description,
+          and one markdown image using this syntax: ![Product Name](imageUrl)
         - Product IDs are internal references for tool calls only — never mention them in responses to the customer
 
         CRITICAL rules for cart operations:
