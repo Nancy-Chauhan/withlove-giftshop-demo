@@ -69,6 +69,30 @@ dotnet run --project src/WithLove.WorkflowServer
 dotnet build src/WithLove.WorkflowServer
 ```
 
+## Generated OpenInference Source
+
+`src/WithLove.OpenInference/OpenInferenceAttributes.g.cs` is generated source, but it is an
+intentional checked-in build input and must not be git-ignored. The normal application build does
+not run the generator.
+
+Regenerate the file whenever
+`src/WithLove.OpenInference/Conventions/openinference-conventions.json` changes, or when the
+generator's required attribute list or output formatting changes:
+
+```bash
+dotnet run --project tools/WithLove.OpenInference.Generator -- generate
+```
+
+Review and commit the generated diff with its manifest or generator change. Before completing the
+change, run the non-writing stale-output check:
+
+```bash
+dotnet run --project tools/WithLove.OpenInference.Generator -- verify
+```
+
+`verify` must succeed; if it reports stale output, run `generate`, review the result, and rerun
+`verify`.
+
 ## Testing
 
 Three test projects: `WithLove.Web.Tests`, `WithLove.Workflows.Tests`, `WithLove.ProductsAPI.Tests`.

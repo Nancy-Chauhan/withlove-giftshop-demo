@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "d5b736e9179335bb239d40cd2326e0be25698d0d",
+  "sources": [
+    {
+      "path": "spec/semantic_conventions.md",
+      "sha256": "13b10aef24c62b1f0a4ff4ca9dd86be50418daf41a6a2d40a9cee7bdc96daaf3"
+    },
+    {
+      "path": "spec/configuration.md",
+      "sha256": "79cc79376bf0b0b09855a32ba33c8bd07edf6344523835160bfae0dc1d58f2f3"
+    },
+    {
+      "path": "python/openinference-semantic-conventions/src/openinference/semconv/resource/__init__.py",
+      "sha256": "c621ec26148c3a182d24e88aa33fb1f9c14c2257f6868f4bca8c50386cfc8c0c"
+    }
+  ],
+  "attributes": [
+    { "name": "document.content" },
+    { "name": "document.id" },
+    { "name": "document.metadata" },
+    { "name": "document.score" },
+    { "name": "exception.escaped" },
+    { "name": "input.mime_type" },
+    { "name": "input.value" },
+    { "name": "openinference.project.name" },
+    { "name": "openinference.span.kind" },
+    { "name": "output.mime_type" },
+    { "name": "output.value" },
+    { "name": "retrieval.documents" },
+    { "name": "session.id" },
+    { "name": "tag.tags" },
+    { "name": "tool.description" },
+    { "name": "tool.id" },
+    { "name": "tool.name" },
+    { "name": "user.id" }
+  ]
+}

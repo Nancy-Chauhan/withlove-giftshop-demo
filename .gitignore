@@ -425,3 +425,6 @@ aspire-manifest.json
 
 # Local deployment secrets — fill in from .secrets.env.example, never commit
 .secrets.env
+
+.testagent/
+.test-artifacts/
