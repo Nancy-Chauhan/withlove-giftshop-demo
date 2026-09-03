@@ -16,9 +16,11 @@
              pipeline step. Booting the AppHost to exercise it would need real secrets, so the
              test project calls it directly. -->
         <InternalsVisibleTo Include="WithLove.ProductsAPI.Tests" />
+        <InternalsVisibleTo Include="WithLove.Telemetry.Tests" />
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\Arize.Aspire.Hosting\Arize.Aspire.Hosting.csproj" IsAspireProjectResource="false" />
         <ProjectReference Include="..\WithLove.ProductsAPI\WithLove.ProductsAPI.csproj" />
     <ProjectReference Include="..\WithLove.Web\WithLove.Web.csproj" />
         <ProjectReference Include="..\WithLove.WorkflowServer\WithLove.WorkflowServer.csproj" />

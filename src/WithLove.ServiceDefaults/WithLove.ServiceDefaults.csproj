@@ -8,9 +8,18 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="WithLove.ProductsAPI.Tests" />
+        <InternalsVisibleTo Include="WithLove.Web.Tests" />
+        <InternalsVisibleTo Include="WithLove.Telemetry.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
 
+        <ProjectReference Include="..\WithLove.OpenInference\WithLove.OpenInference.csproj" />
+
         <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.8.0" />
+        <PackageReference Include="Microsoft.Extensions.AI" Version="10.8.0" />
         <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="10.8.0" />
         <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
         <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
@@ -18,6 +27,7 @@
         <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.17.0-beta.1" />
         <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
         <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
+        <PackageReference Include="Temporalio.Extensions.OpenTelemetry" Version="1.17.0" />
     </ItemGroup>
 
 </Project>

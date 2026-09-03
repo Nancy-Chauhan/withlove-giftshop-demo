@@ -1,6 +1,8 @@
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting;
 using Azure.Provisioning.KeyVault;
+using Microsoft.Extensions.Configuration;
 using TemporalCommunity.Aspire.Hosting;
 using Temporalio.Common;
 
@@ -9,6 +11,9 @@ namespace WithLove.AppHost.Extensions;
 internal static partial class WithLoveApplicationExtensions
 {
     private const string ProductsDatabaseResourceName = "productsDatabase";
+    private const string OpenInferenceProjectName = "withlove-giftshop";
+    private const string ArizeTraceDestinationConfigurationKey = "Arize:TraceDestination";
+    private const string DeploymentTelemetryIdentityKeyVersion = "v1";
     private const string StripeWebhookSecretParameterName = "stripe-webhook-secret";
     private const string StripeWebhookSecretPrefix = "whsec_";
 
@@ -29,14 +34,43 @@ internal static partial class WithLoveApplicationExtensions
             return;
 
         var application = AddFullApplication(builder, infrastructure, parameters, productsApi);
+        var useAx = ResolveUseAxTraceDestination(
+            builder.Configuration[ArizeTraceDestinationConfigurationKey],
+            isPublishMode);
 
         if (isPublishMode)
-            ConfigureAzureDependencies(builder, application, infrastructure, parameters);
+        {
+            // Only the Web process computes pseudonyms. Keep the private deployment key out of the
+            // Products API and WorkflowServer; the worker receives the safe conversation ID.
+            var telemetryIdentityKey = builder.AddParameter("telemetry-identity-key", secret: true);
+            ConfigureAzureDependencies(builder, application, infrastructure, parameters, telemetryIdentityKey);
+        }
         else
+        {
             ConfigureLocalDependencies(builder, application, parameters);
+        }
+
+        ConfigureTraceDestination(builder, application, useAx);
 
         ConfigureWorkflowServer(application.WorkflowServer);
         ConfigureShopSite(application.ShopSite);
+    }
+
+    /// <summary>
+    /// Resolves the Arize trace backend. Local runs default to Phoenix and published applications
+    /// default to AX; either mode can be overridden explicitly for model and deployment testing.
+    /// </summary>
+    internal static bool ResolveUseAxTraceDestination(string? configuredDestination, bool isPublishMode)
+    {
+        if (string.IsNullOrWhiteSpace(configuredDestination))
+            return isPublishMode;
+        if (configuredDestination.Equals("Ax", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (configuredDestination.Equals("Phoenix", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        throw new InvalidOperationException(
+            $"Configuration '{ArizeTraceDestinationConfigurationKey}' must be 'Ax' or 'Phoenix'.");
     }
 
     private static WithLoveParameters AddParameters(IDistributedApplicationBuilder builder, bool isPublishMode)
@@ -228,13 +262,17 @@ internal static partial class WithLoveApplicationExtensions
         IResourceBuilder<ProjectResource> productsApi)
     {
         var workflowServer = builder.AddProject<Projects.WithLove_WorkflowServer>("workflowServer")
-            .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey);
+            .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey)
+            .WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
 
         workflowServer.WaitForAndReference(infrastructure.ProductsDatabase);
         workflowServer.WithReference(productsApi);
 
         var shopSite = builder.AddProject<Projects.WithLove_Web>("shopSite")
-            .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey);
+            .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey)
+            .WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
+
+        productsApi.WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
 
         shopSite.WaitForAndReference(infrastructure.RedisCache);
         shopSite.WaitForAndReference(infrastructure.ProductsDatabase);
@@ -249,6 +287,11 @@ internal static partial class WithLoveApplicationExtensions
         WithLoveApplication application,
         WithLoveParameters parameters)
     {
+        // The DOM handoff is a local verification seam, not an application feature. It is absent
+        // unless explicitly opted in and this local-only branch is never used for publishing.
+        if (builder.Configuration.GetValue<bool>("TelemetryVerification:ExposeOperationId"))
+            application.ShopSite.WithEnvironment("TelemetryVerification__ExposeOperationId", "true");
+
         var temporalServer = builder.AddTemporalDevContainer("temporal-server", options =>
         {
             options.ImageTag = "1.7.2";
@@ -277,11 +320,32 @@ internal static partial class WithLoveApplicationExtensions
         application.ShopSite.WithReference(stripe);
     }
 
+    private static void ConfigureTraceDestination(
+        IDistributedApplicationBuilder builder,
+        WithLoveApplication application,
+        bool useAx)
+    {
+        if (useAx)
+        {
+            var ax = builder.AddArizeAx("arize-ax", protocol: ArizeOtlpProtocol.HttpProtobuf);
+            application.ProductsApi.WithReference(ax);
+            application.WorkflowServer.WithReference(ax);
+            application.ShopSite.WithReference(ax);
+            return;
+        }
+
+        var phoenix = builder.AddArize("arize");
+        application.ProductsApi.WithReference(phoenix).WaitFor(phoenix);
+        application.WorkflowServer.WithReference(phoenix).WaitFor(phoenix);
+        application.ShopSite.WithReference(phoenix).WaitFor(phoenix);
+    }
+
     private static void ConfigureAzureDependencies(
         IDistributedApplicationBuilder builder,
         WithLoveApplication application,
         WithLoveInfrastructure infrastructure,
-        WithLoveParameters parameters)
+        WithLoveParameters parameters,
+        IResourceBuilder<ParameterResource> telemetryIdentityKey)
     {
         var keyVault = builder.AddAzureKeyVault("keyvault");
         var sharedIdentity = builder.AddAzureUserAssignedIdentity("withlove-identity");
@@ -297,6 +361,7 @@ internal static partial class WithLoveApplicationExtensions
         keyVault.AddSecret("kv-stripe-public-key", parameters.StripePublicKey);
         keyVault.AddSecret("kv-stripe-webhook-secret", stripeWebhookSecret);
         keyVault.AddSecret("kv-temporal-api-key", parameters.TemporalApiKey);
+        keyVault.AddSecret("kv-telemetry-identity-key", telemetryIdentityKey);
 
         var temporalCloud = builder.AddTemporalCloud(
             "temporal-cloud",
@@ -313,6 +378,8 @@ internal static partial class WithLoveApplicationExtensions
 
         var shopSite = ConfigureKeyVaultAccess(application.ShopSite, keyVault, sharedIdentity)
             .WithEnvironment("OPENAI_API_KEY", keyVault.GetSecret("kv-openai-api-key"))
+            .WithEnvironment("TelemetryIdentity__Key", keyVault.GetSecret("kv-telemetry-identity-key"))
+            .WithEnvironment("TelemetryIdentity__KeyVersion", DeploymentTelemetryIdentityKeyVersion)
             .WithEnvironment("Stripe__Default__ApiKey", keyVault.GetSecret("kv-stripe-api-key"))
             .WithEnvironment("Stripe__Default__PublicKey", keyVault.GetSecret("kv-stripe-public-key"))
             .WithEnvironment("Stripe__Default__WebhookSecret", keyVault.GetSecret("kv-stripe-webhook-secret"));

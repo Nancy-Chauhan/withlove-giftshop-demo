@@ -30,9 +30,18 @@ build: restore
 # Alias: build
 compile: build
 
-# Start the full application stack via Aspire AppHost
-run:
-    dotnet run --project src/WithLove.AppHost
+# Start the full application stack with the local Phoenix trace backend
+run: run-phoenix
+
+# Start the full application stack with the Phoenix trace backend
+[env("Arize__TraceDestination", "Phoenix")]
+run-phoenix:
+    aspire start --apphost {{ apphost }}
+
+# Start with Arize AX (requires its endpoint, API key, and space ID Aspire secrets)
+[env("Arize__TraceDestination", "Ax")]
+run-ax:
+    aspire start --apphost {{ apphost }}
 
 # Purge soft-deleted Key Vaults that were created by this AppHost environment.
 # Key Vault names remain reserved after a normal delete, so this is required before
