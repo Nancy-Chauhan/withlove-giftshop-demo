@@ -34,9 +34,9 @@
       <PackageReference Include="Aspire.Hosting.Redis" Version="13.5.3" />
       <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.3" />
       <PackageReference Include="CommunityToolkit.Aspire.Hosting.SqlServer.Extensions" Version="13.5.0" />
-      <PackageReference Include="Stripe.Hosting.Aspire" Version="0.3.8" />
+      <PackageReference Include="Stripe.Hosting.Aspire" Version="0.6.4" />
       <PackageReference Include="TemporalCommunity.Aspire.Hosting" Version="0.4.0" />
-      <PackageReference Include="Temporalio" Version="1.17.0" />
+      <PackageReference Include="Temporalio" Version="1.18.0" />
     </ItemGroup>
 
 </Project>

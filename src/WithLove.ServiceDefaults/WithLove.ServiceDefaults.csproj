@@ -18,16 +18,16 @@
 
         <ProjectReference Include="..\WithLove.OpenInference\WithLove.OpenInference.csproj" />
 
-        <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.8.0" />
-        <PackageReference Include="Microsoft.Extensions.AI" Version="10.8.0" />
-        <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="10.8.0" />
-        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
-        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.17.0-beta.1" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
-        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
-        <PackageReference Include="Temporalio.Extensions.OpenTelemetry" Version="1.17.0" />
+        <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+        <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
+        <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.18.0-beta.1" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+        <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
+        <PackageReference Include="Temporalio.Extensions.OpenTelemetry" Version="1.18.0" />
     </ItemGroup>
 
 </Project>
