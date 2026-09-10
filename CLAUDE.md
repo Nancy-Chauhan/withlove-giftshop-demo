@@ -310,7 +310,9 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 **UI** (`ChatFab.razor` + `ChatMessageContent.razor`):
 - FAB pill button (unchanged text "Chat with Love") toggles chat panel
 - Instant message display: user message + thinking indicator shown immediately before Temporal round-trip
-- Rich message rendering: markdown images `![alt](url)`, bold/italic, newlines, inline code
+- Rich message rendering: catalog-backed product cards plus bold/italic, newlines, and inline code.
+  Model-authored image URLs are discarded; reusable product templates show a neutral placeholder
+  when a catalog image is missing or fails in the browser.
 - Quick action buttons for common queries
 
 ## Terminology: Category vs. Collection

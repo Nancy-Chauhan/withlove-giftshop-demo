@@ -2,43 +2,15 @@
 
 @if (_segments.Count > 0)
 {
-    @foreach (var segment in _segments)
+    @foreach (var rendered in _segments)
     {
+        var segment = rendered.Parsed;
         @switch (segment.Type)
         {
-            case ChatMessageContentParser.SegmentType.Product when segment.Product is { } product:
-                <article class="my-3 overflow-hidden rounded-xl border border-stone-100 bg-stone-50 shadow-sm">
-                    @if (!string.IsNullOrWhiteSpace(product.ImageUrl))
-                    {
-                        <img src="@product.ImageUrl"
-                             alt="@product.Name"
-                             class="h-44 w-full object-cover"
-                             loading="lazy" />
-                    }
-                    else
-                    {
-                        <div class="flex h-28 items-center justify-center bg-stone-100 text-stone-300" aria-label="No image available">
-                            <span class="material-symbols-outlined text-3xl">image</span>
-                        </div>
-                    }
-                    <div class="space-y-1 p-3">
-                        <div class="flex items-baseline justify-between gap-3">
-                            <h4 class="font-display text-base font-medium text-stone-800">@product.Name</h4>
-                            <span class="shrink-0 font-medium text-primary">$@product.Price.ToString("F2")</span>
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(product.Description))
-                        {
-                            <p class="text-sm leading-relaxed text-stone-600">@product.Description</p>
-                        }
-                    </div>
-                </article>
-                break;
-
-            case ChatMessageContentParser.SegmentType.Image:
-                <img src="@segment.Url"
-                     alt="@segment.Alt"
-                     class="my-2 max-h-48 max-w-full rounded-lg border border-stone-100 object-cover shadow-sm"
-                     loading="lazy" />
+            case ChatMessageContentParser.SegmentType.Product when rendered.CatalogProduct is { } product:
+                <div class="my-3">
+                    <ProductCardGrid Product="product" Compact="true" />
+                </div>
                 break;
 
             default:
@@ -52,7 +24,11 @@
     [Parameter, EditorRequired]
     public string Text { get; set; } = "";
 
-    private IReadOnlyList<ChatMessageContentParser.Segment> _segments = [];
+    private sealed record RenderedSegment(
+        ChatMessageContentParser.Segment Parsed,
+        WithLove.Web.Models.Product? CatalogProduct = null);
+
+    private IReadOnlyList<RenderedSegment> _segments = [];
     private string? _loadedText;
 
     protected override async Task OnParametersSetAsync()
@@ -69,7 +45,7 @@
 
         if (productSegments.Length == 0)
         {
-            _segments = parsed;
+            _segments = parsed.Select(segment => new RenderedSegment(segment)).ToArray();
             return;
         }
 
@@ -89,13 +65,10 @@
         _segments = parsed.Select(segment =>
         {
             if (segment.Product is not { } product)
-                return segment;
+                return new RenderedSegment(segment);
 
             var canonical = ChatMessageContentParser.FindCatalogProduct(product, catalog);
-            return segment with
-            {
-                Product = ChatMessageContentParser.Canonicalize(product, canonical),
-            };
+            return new RenderedSegment(segment, canonical);
         }).ToArray();
     }
 

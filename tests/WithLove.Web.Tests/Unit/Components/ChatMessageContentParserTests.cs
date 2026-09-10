@@ -24,7 +24,6 @@ public class ChatMessageContentParserTests
         var product = productSegment.Product!;
         product!.Name.Should().Be("Velvet Crimson");
         product.Price.Should().Be(89m);
-        product.ImageUrl.Should().Be("https://lh3.googleusercontent.com/aida-public/abc123");
         product.Description.Should().Be(
             "Large, lush bouquet with dramatic red tones and premium blooms.");
         product.Name.Should().NotContain("ID");
@@ -70,40 +69,37 @@ public class ChatMessageContentParserTests
     }
 
     [Fact]
-    public void Parse_ImageMarkdownWithoutFileExtension_RendersAsImageSegment()
+    public void Parse_LabeledProductResponse_RecognizesProductAndDropsModelImageUrl()
     {
-        const string response = "Take a look:\n![Bouquet](https://lh3.googleusercontent.com/aida-public/opaque-token)";
+        const string response = """
+            Product: Silver Dollar
+            Price: $35.00
+            Why it’s special: A timeless keepsake for marking an important occasion.
+            ![Silver Dollar](https://images.test/uGuG9nK79Bgnoa)
+            """;
 
-        var image = ChatMessageContentParser.Parse(response)
-            .Should().ContainSingle(segment => segment.Type == ChatMessageContentParser.SegmentType.Image)
-            .Which;
+        var segments = ChatMessageContentParser.Parse(response);
 
-        image.Url.Should().Be("https://lh3.googleusercontent.com/aida-public/opaque-token");
-        image.Alt.Should().Be("Bouquet");
+        var product = segments.Should().ContainSingle(
+            segment => segment.Type == ChatMessageContentParser.SegmentType.Product).Which.Product;
+        product.Should().NotBeNull();
+        product!.Name.Should().Be("Silver Dollar");
+        product.Price.Should().Be(35m);
+        product.Description.Should().Be("A timeless keepsake for marking an important occasion.");
+        segments.Select(segment => segment.Content)
+            .Should().NotContain(content => content.Contains("https://", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Canonicalize_ReplacesModelImageAndMetadataWithCatalogValues()
+    public void Parse_UnmatchedMarkdownImage_DropsUrlAndKeepsSurroundingText()
     {
-        var parsed = new ChatMessageContentParser.ProductCard(
-            "Velvet Crimson",
-            1m,
-            string.Empty,
-            "https://model.example/wrong-image");
-        var catalog = new Product
-        {
-            Name = "Velvet Crimson",
-            Price = 89m,
-            Description = "For moments that require no words.",
-            ImageUrl = "https://catalog.example/velvet.jpg",
-        };
+        const string response =
+            "Take a look:\n![Bouquet](https://lh3.googleusercontent.com/aida-public/opaque-token)";
 
-        var product = ChatMessageContentParser.Canonicalize(parsed, catalog);
+        var segment = ChatMessageContentParser.Parse(response).Should().ContainSingle().Which;
 
-        product.Name.Should().Be("Velvet Crimson");
-        product.Price.Should().Be(89m);
-        product.Description.Should().Be("For moments that require no words.");
-        product.ImageUrl.Should().Be("https://catalog.example/velvet.jpg");
+        segment.Type.Should().Be(ChatMessageContentParser.SegmentType.Text);
+        segment.Content.Should().Be("Take a look:");
     }
 
     [Fact]
@@ -112,17 +108,24 @@ public class ChatMessageContentParserTests
         var parsed = new ChatMessageContentParser.ProductCard(
             "Oh, what a romantic pick! Velvet Crimson",
             89m,
-            string.Empty,
-            "https://model.example/wrong-image");
+            string.Empty);
         var catalog = new[]
         {
-            new Product { Name = "Velvet Crimson", Price = 89m },
+            new Product
+            {
+                Id = 9,
+                Name = "Velvet Crimson",
+                Price = 89m,
+                ImageUrl = "https://catalog.example/velvet.jpg",
+            },
             new Product { Name = "Crimson", Price = 50m },
         };
 
         var match = ChatMessageContentParser.FindCatalogProduct(parsed, catalog);
 
         match.Should().NotBeNull();
+        match!.Id.Should().Be(9);
         match!.Name.Should().Be("Velvet Crimson");
+        match.ImageUrl.Should().Be("https://catalog.example/velvet.jpg");
     }
 }

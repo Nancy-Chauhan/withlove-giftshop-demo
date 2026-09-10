@@ -80,6 +80,20 @@ public class GiftShopChatConfigurationTests
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Unit)]
     [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void BuildInstructions_LeavesProductPresentationToTheCatalog()
+    {
+        var instructions = GiftShopChatPrompt.BuildInstructions(null);
+
+        instructions.Should().Contain("copy each product name exactly from the tool result");
+        instructions.Should().Contain("Do not include image URLs");
+        instructions.Should().Contain("renders product images and links from the catalog");
+        instructions.Should().NotContain("markdown image");
+        instructions.Should().NotContain("![Product Name]");
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
     public void ProjectHistory_HidesToolProtocolAndUsesLastAssistantText()
     {
         var timestamp = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
