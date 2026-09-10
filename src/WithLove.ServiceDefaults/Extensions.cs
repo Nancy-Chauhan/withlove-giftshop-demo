@@ -71,9 +71,14 @@ public static class Extensions
     /// Optional application-specific ASP.NET Core tracing configuration. Its request filter is
     /// combined with the shared health endpoint exclusions.
     /// </param>
+    /// <param name="configureTracing">
+    /// Optional application-specific trace-pipeline configuration. The callback runs before the
+    /// destination exporter is registered so filtering processors can precede export processors.
+    /// </param>
     public static OpenTelemetryBuilder ConfigureOpenTelemetry<TBuilder>(
         this TBuilder builder,
-        Action<AspNetCoreTraceInstrumentationOptions>? configureAspNetCoreTracing = null)
+        Action<AspNetCoreTraceInstrumentationOptions>? configureAspNetCoreTracing = null,
+        Action<TracerProviderBuilder>? configureTracing = null)
         where TBuilder : IHostApplicationBuilder
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -107,6 +112,8 @@ public static class Extensions
                         ConfigureAspNetCoreTracing(options, configureAspNetCoreTracing))
                     .AddEntityFrameworkCoreInstrumentation()
                     .AddHttpClientInstrumentation();
+
+                configureTracing?.Invoke(tracing);
 
                 if (routing.TraceDestination == TraceExportDestination.Aspire)
                 {

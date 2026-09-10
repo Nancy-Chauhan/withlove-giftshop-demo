@@ -14,6 +14,7 @@ using WithLove.Data;
 using WithLove.Data.Models;
 using WithLove.Web.Services;
 using WithLove.Web.Middleware;
+using WithLove.Web.Telemetry;
 using Microsoft.AspNetCore.Components.Web;
 using Stripe.Extensions.AspNetCore;
 using WithLove.Web;
@@ -29,15 +30,20 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddOpenInferenceDefaults();
 
-builder.ConfigureOpenTelemetry(aspNetCoreTracing =>
-{
-    // Blazor Interactive Server emits a root span for nearly every SignalR hub call and
-    // component event. Keep normal HTTP request tracing, but exclude that high-volume UI noise.
-    aspNetCoreTracing.EnableAspNetCoreSignalRSupport = false;
-    aspNetCoreTracing.EnableRazorComponentsSupport = false;
-})
-    .WithTracing(tracing =>
+builder.ConfigureOpenTelemetry(
+    aspNetCoreTracing =>
     {
+        // Blazor Interactive Server emits a root span for nearly every SignalR hub call and
+        // component event. Keep normal HTTP request tracing, but exclude that high-volume UI noise.
+        aspNetCoreTracing.EnableAspNetCoreSignalRSupport = false;
+        aspNetCoreTracing.EnableRazorComponentsSupport = false;
+    },
+    tracing =>
+    {
+        // GetHistory probes a lazily created workflow. Temporal reports the ordinary "not started"
+        // case as an error whose exception message includes the raw workflow ID. Register this
+        // before the exporter so only that low-value span is discarded at export time.
+        tracing.AddProcessor(new ChatHydrationExportProcessor());
         tracing.AddSource(Instrumentation.ActivitySourceName);
         tracing.AddSource(TracingInterceptor.ClientSource.Name);
         // FusionCache telemetry is intentionally disabled to keep cache operations out of traces.
