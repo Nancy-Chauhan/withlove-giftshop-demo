@@ -37,12 +37,15 @@ Use `OpenInferenceContextScope` for pseudonymous correlation values that should 
 application spans. Raw authenticated-user and Temporal workflow identifiers must never be assigned
 to `session.id`, `user.id`, or `conversation.id`.
 
-Sensitive inputs and outputs are disabled by default. Setting
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` enables both directions for the chat
-CHAIN and the existing durable model span. `OPENINFERENCE_HIDE_INPUTS` and
-`OPENINFERENCE_HIDE_OUTPUTS` take precedence for their respective directions, while explicit
-`OpenInferenceOptions` values take precedence over all environment settings. Any content-capture
-change must preserve the trace privacy contract documented in `docs/telemetry.md`.
+Sensitive inputs and outputs are disabled by default. The AppHost-level
+`Telemetry:CaptureAiContent=true` setting explicitly authorizes both directions for the chat CHAIN,
+the existing durable model span, and TOOL payloads. It is passed to services as
+`Telemetry__CaptureAiContent`; an explicit `false` value overrides the standard
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` variable and any attempt to unhide content in
+`OpenInferenceOptions`. `OPENINFERENCE_HIDE_INPUTS`, `OPENINFERENCE_HIDE_OUTPUTS`, and explicit hide
+options remain additional restrictions when capture is authorized. When the application setting is
+absent, the standard variable and explicit options retain their compatibility behavior. Any
+content-capture change must preserve the trace privacy contract documented in `docs/telemetry.md`.
 
 ## Generated source
 

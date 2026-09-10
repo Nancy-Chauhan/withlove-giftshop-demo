@@ -45,6 +45,34 @@ public class OpenInferenceScopeTests
     }
 
     [Fact]
+    public void Chain_ApplicationCaptureDenialRedactsDespiteLegacyAndCodeOptIns()
+    {
+        using var source = new ActivitySource("withlove-test-chain-master-private");
+        Activity? stopped = null;
+        using var listener = Listen(source, activity => stopped = activity);
+        var privacy = OpenInferenceTraceConfig.Create(
+            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
+            name => name switch
+            {
+                OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => "false",
+                OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable => "true",
+                _ => null,
+            });
+
+        using (var chain = source.StartChain("chat.turn", "raw prompt", privacy))
+        {
+            chain.Complete("raw completion");
+        }
+
+        stopped!.GetTagItem(OpenInferenceAttributes.InputValue)
+            .Should().Be(OpenInferenceTraceConfig.RedactedValue);
+        stopped.GetTagItem(OpenInferenceAttributes.InputMimeType).Should().BeNull();
+        stopped.GetTagItem(OpenInferenceAttributes.OutputValue)
+            .Should().Be(OpenInferenceTraceConfig.RedactedValue);
+        stopped.GetTagItem(OpenInferenceAttributes.OutputMimeType).Should().BeNull();
+    }
+
+    [Fact]
     public void Chain_ExportsPlainTextInputAndCompletion()
     {
         using var source = new ActivitySource("withlove-test-chain-content");

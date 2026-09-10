@@ -30,17 +30,19 @@ build: restore
 # Alias: build
 compile: build
 
-# Start the full application stack with the local Phoenix trace backend
-run: run-phoenix
+# Start the full application stack with Phoenix and AI content capture disabled
+run: (run-phoenix "false")
 
-# Start the full application stack with the Phoenix trace backend
+# Start with Phoenix; pass --capture to export AI payload content
+[arg("Telemetry__CaptureAiContent", long="capture", value="true")]
 [env("Arize__TraceDestination", "Phoenix")]
-run-phoenix:
+run-phoenix $Telemetry__CaptureAiContent="false":
     aspire start --apphost {{ apphost }}
 
-# Start with Arize AX (requires its endpoint, API key, and space ID Aspire secrets)
+# Start with AX; pass --capture to export AI payload content
+[arg("Telemetry__CaptureAiContent", long="capture", value="true")]
 [env("Arize__TraceDestination", "Ax")]
-run-ax:
+run-ax $Telemetry__CaptureAiContent="false":
     aspire start --apphost {{ apphost }}
 
 # Purge soft-deleted Key Vaults that were created by this AppHost environment.

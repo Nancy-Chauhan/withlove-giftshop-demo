@@ -30,6 +30,30 @@ public class AppHostTelemetryModelTests
             .WithMessage("*Arize:TraceDestination*Ax*Phoenix*");
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("false", false)]
+    [InlineData("False", false)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    public void AiContentCapture_DefaultsOffAndAcceptsOnlyBooleanValues(
+        string? configuredValue,
+        bool expected) =>
+        WithLoveApplicationExtensions.ResolveCaptureAiContent(configuredValue)
+            .Should().Be(expected);
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("yes")]
+    [InlineData(" true ")]
+    public void AiContentCapture_RejectsMalformedValues(string configuredValue)
+    {
+        var action = () => WithLoveApplicationExtensions.ResolveCaptureAiContent(configuredValue);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Telemetry:CaptureAiContent*true*false*");
+    }
+
     [Fact]
     public async Task LocalFullApp_WiresPhoenixWithoutRequiringAnIdentityKeyParameter()
     {
@@ -71,6 +95,9 @@ public class AppHostTelemetryModelTests
         model.Resources.OfType<ParameterResource>().Should().NotContain(resource =>
             resource.Name == "telemetry-identity-key");
         web.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
+        AssertCaptureEnvironment(products, expectedCapture: false);
+        AssertCaptureEnvironment(worker, expectedCapture: false);
+        AssertCaptureEnvironment(web, expectedCapture: false);
     }
 
     [Fact]
@@ -117,6 +144,9 @@ public class AppHostTelemetryModelTests
             var environment = await ResolveEnvironmentAsync(service, builder.ExecutionContext);
             AssertParameterExpression(environment, "Arize__Tracing__Ax__Endpoint", "arize-ax-otlp-endpoint");
             environment.Should().NotContainKey("Phoenix__OtlpTracesEndpoint");
+            AssertCaptureEnvironment(
+                environment,
+                expectedCapture: false);
         }
     }
 
@@ -134,7 +164,7 @@ public class AppHostTelemetryModelTests
     }
 
     [Fact]
-    public async Task LocalVerificationOptIn_ExposesOperationIdAndCapturesModelMessages()
+    public async Task LocalVerificationOptIn_ExposesOnlyTheOperationId()
     {
         var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.WithLove_AppHost>(
             args: ["TelemetryVerification:ExposeOperationId=true"]);
@@ -147,19 +177,34 @@ public class AppHostTelemetryModelTests
             if (service.Name == "shopSite")
             {
                 environment["TelemetryVerification__ExposeOperationId"].Should().Be("true");
-                environment["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"]
-                    .Should().Be("true");
+                AssertCaptureEnvironment(environment, expectedCapture: false);
             }
             else if (service.Name == "workflowServer")
             {
                 environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
-                environment["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"]
-                    .Should().Be("true");
+                AssertCaptureEnvironment(environment, expectedCapture: false);
             }
             else
             {
                 environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
+                AssertCaptureEnvironment(environment, expectedCapture: false);
             }
+        }
+    }
+
+    [Fact]
+    public async Task AiContentCaptureOptIn_EnablesOnlyWebAndWorkflowServer()
+    {
+        var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.WithLove_AppHost>(
+            args: ["Telemetry:CaptureAiContent=true"]);
+        await using var app = await builder.BuildAsync();
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        foreach (var service in model.Resources.OfType<ProjectResource>())
+        {
+            var environment = await ResolveEnvironmentAsync(service, builder.ExecutionContext);
+            AssertCaptureEnvironment(environment, service.Name != "productsApi");
+            environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
         }
     }
 
@@ -180,4 +225,22 @@ public class AppHostTelemetryModelTests
         string parameterName) =>
         environment[key].Should().BeAssignableTo<IManifestExpressionProvider>()
             .Which.ValueExpression.Should().Be($"{{{parameterName}.value}}");
+
+    private static void AssertCaptureEnvironment(
+        IReadOnlyDictionary<string, object> environment,
+        bool? expectedCapture)
+    {
+        const string applicationSetting = "Telemetry__CaptureAiContent";
+        const string standardSetting = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
+        if (expectedCapture is null)
+        {
+            environment.Should().NotContainKey(applicationSetting);
+            environment.Should().NotContainKey(standardSetting);
+            return;
+        }
+
+        var expected = expectedCapture.Value ? "true" : "false";
+        environment[applicationSetting].Should().Be(expected);
+        environment[standardSetting].Should().Be(expected);
+    }
 }

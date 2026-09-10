@@ -13,6 +13,10 @@ internal static partial class WithLoveApplicationExtensions
     private const string ProductsDatabaseResourceName = "productsDatabase";
     private const string OpenInferenceProjectName = "withlove-giftshop";
     private const string ArizeTraceDestinationConfigurationKey = "Arize:TraceDestination";
+    private const string CaptureAiContentConfigurationKey = "Telemetry:CaptureAiContent";
+    private const string CaptureAiContentEnvironmentVariable = "Telemetry__CaptureAiContent";
+    private const string GenAiCaptureMessageContentEnvironmentVariable =
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
     private const string DeploymentTelemetryIdentityKeyVersion = "v1";
     private const string StripeWebhookSecretParameterName = "stripe-webhook-secret";
     private const string StripeWebhookSecretPrefix = "whsec_";
@@ -34,6 +38,9 @@ internal static partial class WithLoveApplicationExtensions
             return;
 
         var application = AddFullApplication(builder, infrastructure, parameters, productsApi);
+        var captureAiContent = ResolveCaptureAiContent(
+            builder.Configuration[CaptureAiContentConfigurationKey]);
+        ConfigureAiContentCapture(application, captureAiContent);
         var useAx = ResolveUseAxTraceDestination(
             builder.Configuration[ArizeTraceDestinationConfigurationKey],
             isPublishMode);
@@ -71,6 +78,23 @@ internal static partial class WithLoveApplicationExtensions
 
         throw new InvalidOperationException(
             $"Configuration '{ArizeTraceDestinationConfigurationKey}' must be 'Ax' or 'Phoenix'.");
+    }
+
+    /// <summary>
+    /// Resolves the application-level authorization for exporting AI payload content. Capture is
+    /// disabled when the setting is absent and malformed values fail during AppHost startup.
+    /// </summary>
+    internal static bool ResolveCaptureAiContent(string? configuredValue)
+    {
+        if (configuredValue is null)
+            return false;
+        if (configuredValue.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (configuredValue.Equals("false", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        throw new InvalidOperationException(
+            $"Configuration '{CaptureAiContentConfigurationKey}' must be 'true' or 'false'.");
     }
 
     private static WithLoveParameters AddParameters(IDistributedApplicationBuilder builder, bool isPublishMode)
@@ -292,12 +316,6 @@ internal static partial class WithLoveApplicationExtensions
         if (builder.Configuration.GetValue<bool>("TelemetryVerification:ExposeOperationId"))
         {
             application.ShopSite.WithEnvironment("TelemetryVerification__ExposeOperationId", "true");
-            application.ShopSite.WithEnvironment(
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-                "true");
-            application.WorkflowServer.WithEnvironment(
-                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-                "true");
         }
 
         var temporalServer = builder.AddTemporalDevContainer("temporal-server", options =>
@@ -334,6 +352,22 @@ internal static partial class WithLoveApplicationExtensions
         stripe.WithWebhookForwardTo(application.ShopSite, "/stripe/webhook");
         application.WorkflowServer.WithReference(stripe);
         application.ShopSite.WithReference(stripe);
+    }
+
+    private static void ConfigureAiContentCapture(
+        WithLoveApplication application,
+        bool captureAiContent)
+    {
+        var value = captureAiContent ? "true" : "false";
+        application.ProductsApi
+            .WithEnvironment(CaptureAiContentEnvironmentVariable, "false")
+            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, "false");
+        application.ShopSite
+            .WithEnvironment(CaptureAiContentEnvironmentVariable, value)
+            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, value);
+        application.WorkflowServer
+            .WithEnvironment(CaptureAiContentEnvironmentVariable, value)
+            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, value);
     }
 
     private static void ConfigureTraceDestination(

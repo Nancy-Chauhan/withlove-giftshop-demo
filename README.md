@@ -29,18 +29,65 @@ aspire secret set Parameters:stripe-public-key "<your-stripe-public-key>"
 aspire secret set Parameters:redis-password "<local-redis-password>"
 ```
 
-Local runs use Phoenix for traces by default. To send traces to Arize AX instead, store the AX
-connection values without committing them and select AX for that AppHost run:
+### Telemetry destinations and content security
+
+Only traces switch between Arize backends. Logs and metrics continue to use the Aspire dashboard
+in every local mode. Local runs default to the AppHost-managed Phoenix container; publish mode
+defaults to AX.
+
+The root `justfile` exposes all four supported local combinations:
+
+| Destination | AI payload content | Command |
+|---|---|---|
+| Phoenix | Redacted/omitted | `just run` or `just run-phoenix` |
+| Phoenix | Captured | `just run-phoenix --capture` |
+| Arize AX | Redacted/omitted | `just run-ax` |
+| Arize AX | Captured | `just run-ax --capture` |
+
+The `--capture` flag is an explicit opt-in. It permits the Web and WorkflowServer resources to
+export chat inputs and outputs, model messages and system instructions, and tool arguments and
+results. Product retrieval and embedding payloads remain hidden. Captured content can contain
+customer or business-sensitive data, and changing the flag affects only new telemetry; it does not
+redact or delete data already retained by Phoenix or AX.
+
+Before using AX, store its connection values in the Aspire secret store. Use the endpoint and
+base64 space ID shown on the AX connect page; the sample does not assume an AX region.
 
 ```bash
 aspire secret set ARIZE_OTLP_ENDPOINT "<endpoint-from-the-AX-connect-page>"
 aspire secret set ARIZE_API_KEY "<your-AX-api-key>"
 aspire secret set ARIZE_SPACE_ID "<your-AX-space-id>"
-Arize__TraceDestination=Ax aspire start
+just run-ax
 ```
 
-The configured AX endpoint determines the region; the application does not assume one. Traces go
-to the selected Arize backend while logs and metrics continue to go to the Aspire dashboard.
+The equivalent direct Aspire commands are:
+
+```bash
+# Phoenix, content hidden
+Arize__TraceDestination=Phoenix Telemetry__CaptureAiContent=false \
+  aspire start --apphost src/WithLove.AppHost/WithLove.AppHost.csproj
+
+# AX, content explicitly captured
+Arize__TraceDestination=Ax Telemetry__CaptureAiContent=true \
+  aspire start --apphost src/WithLove.AppHost/WithLove.AppHost.csproj
+```
+
+Configuration keys use `:` in configuration and `__` in environment-variable form:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `Arize:TraceDestination` / `Arize__TraceDestination` | Phoenix locally; AX when published | Selects `Phoenix` or `Ax` for traces only. The two exporters are mutually exclusive. |
+| `Telemetry:CaptureAiContent` / `Telemetry__CaptureAiContent` | `false` | Application-level authorization for sensitive AI payload export. This is what `--capture` sets. |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Managed by the AppHost | Propagates the application capture decision to the underlying GenAI instrumentation. Do not use it to bypass `Telemetry:CaptureAiContent=false`. |
+| `OPENINFERENCE_HIDE_INPUTS` | Effective when set to `true` | Additional input restriction. It can redact inputs after capture is authorized, but `false` cannot authorize capture by itself. |
+| `OPENINFERENCE_HIDE_OUTPUTS` | Effective when set to `true` | Additional output restriction with the same deny-only behavior. |
+| `TelemetryVerification:ExposeOperationId` / `TelemetryVerification__ExposeOperationId` | `false` | Local verification seam that emits a completed turn's correlation ID in hidden DOM metadata. It does not enable content capture. |
+
+`Telemetry:CaptureAiContent=false` wins over the standard GenAI capture variable and over attempts
+to unhide content through OpenInference options. With capture authorized, either
+`OPENINFERENCE_HIDE_INPUTS=true` or `OPENINFERENCE_HIDE_OUTPUTS=true` can independently restrict
+that direction when supplied to the instrumented service process. AX credentials are attached only
+to the AX trace exporter and are not sent to Aspire's log or metric exporters.
 
 > `Parameters:stripe-webhook-secret` is **not** set locally. The Stripe CLI container runs
 > `stripe listen` and supplies a fresh signing secret each session. It is a publish/Azure-only
@@ -82,10 +129,10 @@ Build the solution:
 dotnet build
 ```
 
-Run the Aspire AppHost
+Run the Aspire AppHost with the default Phoenix backend and content capture disabled:
 
 ```bash
-aspire run
+just run
 ```
 
 Opening Aspire dashboard should show:
@@ -99,8 +146,8 @@ Opening Aspire dashboard should show:
 - **Temporal Server** — local dev server
 - **Arize Phoenix** — local OpenInference trace analysis; logs and metrics stay in the Aspire dashboard
 
-Select AX as described above when you want the same OpenInference traces sent to Arize AX instead
-of running Phoenix.
+Use `just run-phoenix`, `just run-ax`, and their `--capture` variants as described in
+[Telemetry destinations and content security](#telemetry-destinations-and-content-security).
 
 To stop, press `Ctrl+C` in the terminal.
 

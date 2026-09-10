@@ -90,7 +90,7 @@ public sealed class PhoenixChatTraceVerifier(
 
         var attributes = chain[0].GetProperty("attributes");
         RequireSafeAttribute(attributes, "session.id");
-        RequireSafeAttribute(attributes, "user.id");
+        RequireOptionalSafeAttribute(attributes, "user.id");
         if (attributes.GetProperty("chat.operation_id").GetString() != operationId)
             throw new InvalidOperationException("The CHAIN operation ID did not match the browser handoff.");
 
@@ -192,6 +192,12 @@ public sealed class PhoenixChatTraceVerifier(
             return false;
         }
 
+        if (expectation.RequireRedactedAiContent
+            && !HasRedactedAiContent(spans, llmSpans, chainSpanId, expectation))
+        {
+            return false;
+        }
+
         if (expectation.ExpectedToolName is { } expectedToolName)
         {
             var matchingTools = spans
@@ -233,6 +239,51 @@ public sealed class PhoenixChatTraceVerifier(
         return true;
     }
 
+    private static bool HasRedactedAiContent(
+        IReadOnlyCollection<JsonElement> spans,
+        IReadOnlyCollection<JsonElement> llmSpans,
+        string chainSpanId,
+        PhoenixChatTraceExpectation expectation)
+    {
+        var chain = spans.SingleOrDefault(span => GetSpanId(span) == chainSpanId);
+        if (chain.ValueKind == JsonValueKind.Undefined
+            || !HasRedactedAttribute(chain, "input.value")
+            || !HasRedactedAttribute(chain, "output.value")
+            || llmSpans.Any(HasAnyModelMessageAttribute))
+        {
+            return false;
+        }
+
+        if (expectation.ExpectedToolName is { } expectedToolName)
+        {
+            var tools = spans
+                .Where(span => IsSpanKind(span, "TOOL"))
+                .Where(span => TryGetStringAttribute(span, "tool.name") == expectedToolName)
+                .ToArray();
+            if (tools.Length == 0
+                || tools.Any(span => !HasRedactedAttribute(span, "input.value"))
+                || tools.Any(span => !HasRedactedAttribute(span, "output.value")))
+            {
+                return false;
+            }
+        }
+
+        if (expectation.RequireRetriever)
+        {
+            var retrievers = spans
+                .Where(span => IsSpanKind(span, "RETRIEVER"))
+                .Where(span => IsDescendantOf(span, chainSpanId, spans))
+                .ToArray();
+            if (retrievers.Length == 0
+                || retrievers.Any(span => !HasRedactedAttribute(span, "input.value")))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool HasModelAndTokenAttributes(JsonElement span) =>
         HasAnyAttribute(span, "gen_ai.request.model", "gen_ai.response.model", "llm.model_name")
         && HasAnyNumericAttribute(span, "gen_ai.usage.input_tokens", "llm.token_count.prompt")
@@ -241,6 +292,13 @@ public sealed class PhoenixChatTraceVerifier(
     private static bool HasCapturedModelExchange(JsonElement span) =>
         HasAttributeOrPrefix(span, "gen_ai.input.messages", "llm.input_messages.")
         && HasAttributeOrPrefix(span, "gen_ai.output.messages", "llm.output_messages.");
+
+    private static bool HasAnyModelMessageAttribute(JsonElement span) =>
+        HasAttributeOrPrefix(span, "gen_ai.input.messages", "llm.input_messages.")
+        || HasAttributeOrPrefix(span, "gen_ai.output.messages", "llm.output_messages.");
+
+    private static bool HasRedactedAttribute(JsonElement span, string name) =>
+        TryGetStringAttribute(span, name) == "__REDACTED__";
 
     private static bool HasRetrievalDocumentId(JsonElement span) =>
         span.TryGetProperty("attributes", out var attributes)
@@ -336,6 +394,11 @@ public sealed class PhoenixChatTraceVerifier(
             throw new InvalidOperationException($"CHAIN attribute {name} was missing or not pseudonymous.");
         }
     }
+
+    private static void RequireOptionalSafeAttribute(JsonElement attributes, string name)
+    {
+        if (attributes.TryGetProperty(name, out _)) RequireSafeAttribute(attributes, name);
+    }
 }
 
 public sealed record PhoenixPollingOptions
@@ -367,6 +430,20 @@ public sealed record PhoenixChatTraceExpectation
         PollingDescription = "a complete product-search trace with model, TOOL, and RETRIEVER telemetry",
     };
 
+    /// <summary>
+    /// Requires the deterministic product-search path while asserting that application, tool,
+    /// and retriever payloads are redacted and model message content is absent.
+    /// </summary>
+    public static PhoenixChatTraceExpectation RedactedProductSearch { get; } = new()
+    {
+        MinimumLlmSpanCount = 2,
+        ExpectedToolName = "search_products",
+        RequireRetriever = true,
+        RequireModelAndTokenAttributes = true,
+        RequireRedactedAiContent = true,
+        PollingDescription = "a redacted product-search trace with model, TOOL, and RETRIEVER telemetry",
+    };
+
     /// <summary>Gets the minimum number of MEAI-owned LLM spans required in the trace.</summary>
     public int MinimumLlmSpanCount { get; init; } = 1;
 
@@ -381,6 +458,12 @@ public sealed record PhoenixChatTraceExpectation
 
     /// <summary>Gets whether every LLM span must contain captured input and output messages.</summary>
     public bool RequireCapturedModelMessages { get; init; }
+
+    /// <summary>
+    /// Gets whether application, tool, and retriever payloads must be redacted and model message
+    /// content must be absent.
+    /// </summary>
+    public bool RequireRedactedAiContent { get; init; }
 
     /// <summary>Gets the description included in polling timeout diagnostics.</summary>
     public string PollingDescription { get; init; } =

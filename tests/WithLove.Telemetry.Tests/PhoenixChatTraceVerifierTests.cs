@@ -75,6 +75,84 @@ public class PhoenixChatTraceVerifierTests
     }
 
     [Fact]
+    public async Task VerifyAsync_RedactedProductSearchAcceptsMetadataWithoutPayloads()
+    {
+        var responses = new Queue<string>(
+        [
+            OperationResponseWithoutUserJson,
+            RedactedProductSearchTraceResponseJson.Replace(
+                ",\"user.id\":\"hmac-v1-user\"",
+                string.Empty,
+                StringComparison.Ordinal),
+        ]);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responses.Dequeue(), Encoding.UTF8, "application/json"),
+        });
+        using var client = new HttpClient(handler);
+        var verifier = new PhoenixChatTraceVerifier(client, new()
+        {
+            MaxAttempts = 1,
+            RetryDelay = TimeSpan.Zero,
+            Deadline = TimeSpan.FromSeconds(1),
+        });
+
+        var result = await verifier.VerifyAsync(
+            new Uri("http://phoenix/"),
+            "withlove-giftshop",
+            "operation-123",
+            [],
+            PhoenixChatTraceExpectation.RedactedProductSearch);
+
+        result.TraceId.Should().Be("trace-1");
+        result.SpanCount.Should().Be(6);
+    }
+
+    public static TheoryData<string> UnsafeRedactedProductSearchCases => new()
+    {
+        RedactedProductSearchTraceResponseJson.Replace(
+            "\"input.value\":\"__REDACTED__\",\"output.value\":\"__REDACTED__\"",
+            "\"input.value\":\"secret prompt\",\"output.value\":\"__REDACTED__\"",
+            StringComparison.Ordinal),
+        RedactedProductSearchTraceResponseJson.Replace(
+            "\"gen_ai.operation.name\":\"chat\",\"gen_ai.request.model\":\"gpt\"",
+            "\"gen_ai.operation.name\":\"chat\",\"gen_ai.request.model\":\"gpt\",\"gen_ai.input.messages\":\"secret prompt\"",
+            StringComparison.Ordinal),
+        RedactedProductSearchTraceResponseJson.Replace(
+            "\"gen_ai.operation.name\":\"chat\",\"gen_ai.request.model\":\"gpt\"",
+            "\"gen_ai.operation.name\":\"chat\",\"gen_ai.request.model\":\"gpt\",\"gen_ai.output.messages\":\"secret response\"",
+            StringComparison.Ordinal),
+    };
+
+    [Theory]
+    [MemberData(nameof(UnsafeRedactedProductSearchCases))]
+    public async Task VerifyAsync_RedactedProductSearchRejectsCapturedPayloads(string traceResponse)
+    {
+        var responses = new Queue<string>([OperationResponseJson, traceResponse]);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responses.Dequeue(), Encoding.UTF8, "application/json"),
+        });
+        using var client = new HttpClient(handler);
+        var verifier = new PhoenixChatTraceVerifier(client, new()
+        {
+            MaxAttempts = 1,
+            RetryDelay = TimeSpan.Zero,
+            Deadline = TimeSpan.FromSeconds(1),
+        });
+
+        var action = () => verifier.VerifyAsync(
+            new Uri("http://phoenix/"),
+            "withlove-giftshop",
+            "operation-123",
+            [],
+            PhoenixChatTraceExpectation.RedactedProductSearch);
+
+        await action.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("*redacted product-search trace*");
+    }
+
+    [Fact]
     public async Task VerifyAsync_StopsAtConfiguredAttemptCount()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -268,6 +346,13 @@ public class PhoenixChatTraceVerifierTests
         ]}
         """;
 
+    private const string OperationResponseWithoutUserJson = """
+        {"data":[
+          {"name":"chat.turn","span_kind":"CHAIN","context":{"trace_id":"trace-1","span_id":"chain-1"},"parent_id":null,
+           "attributes":{"chat.operation_id":"operation-123","session.id":"hmac-v1-session"}}
+        ]}
+        """;
+
     private const string PartialTraceResponseJson = """
         {"data":[
           {"name":"chat.turn","span_kind":"CHAIN","context":{"trace_id":"trace-1","span_id":"chain-1"},"parent_id":null,
@@ -302,6 +387,23 @@ public class PhoenixChatTraceVerifierTests
           {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-2"},"parent_id":"durable-1",
            "attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"gpt","gen_ai.usage.input_tokens":20,"gen_ai.usage.output_tokens":8,
                          "gen_ai.input.messages":"[{tool-result}]","gen_ai.output.messages":"[{assistant-final}]}"}}
+        ]}
+        """;
+
+    private const string RedactedProductSearchTraceResponseJson = """
+        {"data":[
+          {"name":"chat.turn","span_kind":"CHAIN","context":{"trace_id":"trace-1","span_id":"chain-1"},"parent_id":null,
+           "attributes":{"chat.operation_id":"operation-123","session.id":"hmac-v1-session","user.id":"hmac-v1-user","input.value":"__REDACTED__","output.value":"__REDACTED__"}},
+          {"name":"durable.turn","span_kind":"INTERNAL","context":{"trace_id":"trace-1","span_id":"durable-1"},"parent_id":"chain-1",
+           "attributes":{"conversation.id":"hmac-v1-session"}},
+          {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-1"},"parent_id":"durable-1",
+           "attributes":{"gen_ai.operation.name":"chat","gen_ai.request.model":"gpt","gen_ai.usage.input_tokens":12,"gen_ai.usage.output_tokens":4}},
+          {"name":"execute_tool search_products","span_kind":"TOOL","context":{"trace_id":"trace-1","span_id":"tool-1"},"parent_id":"durable-1",
+           "attributes":{"tool.name":"search_products","tool.id":"call-1","input.value":"__REDACTED__","output.value":"__REDACTED__"}},
+          {"name":"product.search","span_kind":"RETRIEVER","context":{"trace_id":"trace-1","span_id":"retriever-1"},"parent_id":"tool-1",
+           "attributes":{"input.value":"__REDACTED__","retrieval.documents.0.document.id":"42"}},
+          {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-2"},"parent_id":"durable-1",
+           "attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"gpt","gen_ai.usage.input_tokens":20,"gen_ai.usage.output_tokens":8}}
         ]}
         """;
 

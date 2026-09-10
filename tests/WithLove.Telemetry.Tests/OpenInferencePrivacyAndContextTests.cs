@@ -6,35 +6,77 @@ namespace WithLove.Telemetry.Tests;
 
 public class OpenInferencePrivacyAndContextTests
 {
-    [Fact]
-    public void PrivacyConfiguration_UsesExplicitValuesThenEnvironmentThenDefaults()
+    [Theory]
+    [InlineData("false", "false", "false", true, true)]
+    [InlineData("true", "false", "false", false, false)]
+    [InlineData("true", "true", "false", true, false)]
+    [InlineData("true", "false", "true", false, true)]
+    [InlineData("true", "true", "true", true, true)]
+    public void ApplicationCapturePolicy_AppliesMasterAuthorizationThenDirectionalRestrictions(
+        string captureAiContent,
+        string hideInputs,
+        string hideOutputs,
+        bool expectedHideInputs,
+        bool expectedHideOutputs)
     {
-        static string? Environment(string name) => name switch
+        string? Environment(string name) => name switch
         {
-            OpenInferenceTraceConfig.HideInputsEnvironmentVariable => "true",
-            OpenInferenceTraceConfig.HideOutputsEnvironmentVariable => "not-a-bool",
+            OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => captureAiContent,
+            OpenInferenceTraceConfig.HideInputsEnvironmentVariable => hideInputs,
+            OpenInferenceTraceConfig.HideOutputsEnvironmentVariable => hideOutputs,
             _ => null
         };
 
-        static string? CaptureEnvironment(string name) => name switch
+        var configuration = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
+
+        configuration.HideInputs.Should().Be(expectedHideInputs);
+        configuration.HideOutputs.Should().Be(expectedHideOutputs);
+    }
+
+    [Fact]
+    public void ApplicationCaptureDenial_OverridesLegacyOptInAndExplicitUnhideOptions()
+    {
+        static string? Environment(string name) => name switch
         {
+            OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => "false",
             OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable => "true",
             _ => null
         };
 
-        var environmentOnly = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
-        var captureEnabled = OpenInferenceTraceConfig.Create(
-            getEnvironmentVariable: CaptureEnvironment);
-        var explicitOverride = OpenInferenceTraceConfig.Create(
-            new OpenInferenceOptions { HideInputs = false, HideOutputs = true },
+        var configuration = OpenInferenceTraceConfig.Create(
+            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
             Environment);
 
-        environmentOnly.HideInputs.Should().BeTrue();
-        environmentOnly.HideOutputs.Should().BeTrue();
-        captureEnabled.HideInputs.Should().BeFalse();
-        captureEnabled.HideOutputs.Should().BeFalse();
-        explicitOverride.HideInputs.Should().BeFalse();
-        explicitOverride.HideOutputs.Should().BeTrue();
+        configuration.HideInputs.Should().BeTrue();
+        configuration.HideOutputs.Should().BeTrue();
+    }
+
+    [Fact]
+    public void MissingApplicationPolicy_RetainsLegacyAndExplicitOptionCompatibility()
+    {
+        static string? Environment(string name) =>
+            name == OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable ? "true" : null;
+
+        var legacyCapture = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
+        var explicitDirections = OpenInferenceTraceConfig.Create(
+            new OpenInferenceOptions { HideInputs = false, HideOutputs = true },
+            static _ => null);
+
+        legacyCapture.HideInputs.Should().BeFalse();
+        legacyCapture.HideOutputs.Should().BeFalse();
+        explicitDirections.HideInputs.Should().BeFalse();
+        explicitDirections.HideOutputs.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ApplicationCapturePolicy_RejectsMalformedValue()
+    {
+        var action = () => OpenInferenceTraceConfig.Create(
+            getEnvironmentVariable: name =>
+                name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable ? "yes" : null);
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Telemetry__CaptureAiContent*true*false*");
     }
 
     [Fact]

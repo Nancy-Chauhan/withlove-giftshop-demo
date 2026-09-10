@@ -3,22 +3,44 @@ namespace WithLove.OpenInference;
 /// <summary>Resolved content-privacy configuration for WithLove application spans.</summary>
 public sealed class OpenInferenceTraceConfig
 {
+    /// <summary>Gets the sentinel applied to protected input and output values.</summary>
     public const string RedactedValue = "__REDACTED__";
+
+    /// <summary>Gets the OpenInference environment variable that hides input content.</summary>
     public const string HideInputsEnvironmentVariable = "OPENINFERENCE_HIDE_INPUTS";
+
+    /// <summary>Gets the OpenInference environment variable that hides output content.</summary>
     public const string HideOutputsEnvironmentVariable = "OPENINFERENCE_HIDE_OUTPUTS";
+
+    /// <summary>Gets the application-level environment variable that authorizes AI content capture.</summary>
+    public const string CaptureAiContentEnvironmentVariable = "Telemetry__CaptureAiContent";
+
+    /// <summary>Gets the standard GenAI instrumentation environment variable for message capture.</summary>
     public const string CaptureMessageContentEnvironmentVariable =
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
 
+    /// <summary>Gets configuration resolved from the current process environment.</summary>
     public static OpenInferenceTraceConfig Default { get; } = Create();
 
+    /// <summary>Gets whether input payloads are hidden.</summary>
     public bool HideInputs { get; }
+
+    /// <summary>Gets whether output payloads are hidden.</summary>
     public bool HideOutputs { get; }
 
     private OpenInferenceTraceConfig(OpenInferenceOptions options, Func<string, string?> environment)
     {
-        var captureMessageContent =
-            bool.TryParse(environment(CaptureMessageContentEnvironmentVariable), out var capture)
-            && capture;
+        var applicationCapture = ResolveApplicationCapture(environment);
+        if (applicationCapture is false)
+        {
+            HideInputs = true;
+            HideOutputs = true;
+            return;
+        }
+
+        var captureMessageContent = applicationCapture
+            ?? (bool.TryParse(environment(CaptureMessageContentEnvironmentVariable), out var capture)
+                && capture);
 
         HideInputs = Resolve(
             options.HideInputs,
@@ -70,6 +92,20 @@ public sealed class OpenInferenceTraceConfig
         Func<string, string?> environment) =>
         codeValue
         ?? (bool.TryParse(environment(environmentVariable), out var value) ? value : defaultValue);
+
+    private static bool? ResolveApplicationCapture(Func<string, string?> environment)
+    {
+        var configuredValue = environment(CaptureAiContentEnvironmentVariable);
+        if (configuredValue is null)
+            return null;
+        if (configuredValue.Equals("true", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (configuredValue.Equals("false", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        throw new InvalidOperationException(
+            $"Environment variable '{CaptureAiContentEnvironmentVariable}' must be 'true' or 'false'.");
+    }
 }
 
 internal enum PrivacyAction

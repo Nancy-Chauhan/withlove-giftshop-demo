@@ -16,11 +16,17 @@ The application does not create another OpenInference or MEAI `LLM` span around 
 decorator only enriches the durable package's existing model span, which keeps one model latency,
 token, and cost record.
 
-Chat message content is disabled when no capture setting is present. Setting
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true` enables `input.value`/`output.value` on
-the application-owned `chat.turn` CHAIN and `gen_ai.input.messages`,
-`gen_ai.output.messages`, and `gen_ai.system_instructions` on the existing durable model span.
-`OPENINFERENCE_HIDE_INPUTS` and `OPENINFERENCE_HIDE_OUTPUTS` override that opt-in per direction.
+AI payload content is disabled by default. `Telemetry:CaptureAiContent=true` is the application-level
+authorization that enables `input.value`/`output.value` on the application-owned `chat.turn` CHAIN,
+`gen_ai.input.messages`, `gen_ai.output.messages`, and `gen_ai.system_instructions` on the existing
+durable model span, plus TOOL arguments and results. AppHost sends the resolved value explicitly to
+Web and WorkflowServer through both `Telemetry__CaptureAiContent` and the standard
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` variable. An explicit application value of
+`false` overrides a conflicting inherited standard variable. `OPENINFERENCE_HIDE_INPUTS` and
+`OPENINFERENCE_HIDE_OUTPUTS` remain additional per-direction restrictions when capture is enabled.
+The setting does not affect span structure, model/tool names, token counts, status, timing, routing,
+logs, metrics, error policy, or verification correlation IDs. Product retrieval/embedding payloads
+remain unconditionally hidden by their component-specific policy.
 The custom Temporal update-context interceptor preserves the physical hierarchy from `chat.turn`
 through `UpdateWorkflow` to model, tool, and retriever spans. The per-turn `chat.operation_id` is
 also carried onto application and model spans as a secondary search and verification key.
@@ -64,6 +70,23 @@ aspire secret set ARIZE_API_KEY "<your-AX-api-key>"
 aspire secret set ARIZE_SPACE_ID "<your-AX-space-id>"
 Arize__TraceDestination=Ax aspire start
 ```
+
+The root `justfile` exposes the same backend choice with content capture disabled by default. The
+`--capture` flag is an explicit privacy opt-in and is independent of browser verification:
+
+```bash
+just run-phoenix
+just run-phoenix --capture
+just run-ax
+just run-ax --capture
+```
+
+Captured prompts, responses, system instructions, and tool payloads can contain customer or
+business-sensitive data. ProductsAPI is explicitly forced to capture-disabled even when the flag is
+enabled, preserving its component-specific retrieval/embedding policy and overriding inherited
+process environment. Changing this setting affects new telemetry only; it does not redact or
+delete traces already retained by Phoenix or AX. Phoenix is ephemeral in this AppHost because no
+volume is mounted, while AX retention and deletion must be handled separately through AX controls.
 
 No collector region is assumed. `ARIZE_OTLP_ENDPOINT` must be the endpoint supplied for the AX
 space. OTLP/HTTP is the default protocol; an endpoint ending in `/v1` is normalized to the
@@ -114,23 +137,26 @@ version together. Never copy the committed local demo key into a deployment.
 
 `TelemetryVerification:ExposeOperationId` is false by default and is wired only on local runs.
 When explicitly enabled, the chat component clears the previous value before each turn and renders
-the completed turn's operation ID in a hidden `data-operation-id` attribute. The same opt-in enables
-GenAI message capture for Web and WorkflowServer so the verifier can inspect model input and output.
-This is a correlation identifier, not a user or workflow identity. Neither setting is present in
-the Azure publish configuration.
+the completed turn's operation ID in a hidden `data-operation-id` attribute. It does not enable AI
+content capture. This is a correlation identifier, not a user or workflow identity. Content capture
+must be authorized independently with `Telemetry:CaptureAiContent=true` or the `--capture` recipe
+flag.
 
 After browser automation reads that value, verify the stored trace with:
 
 ```bash
 dotnet run --project tools/WithLove.Telemetry.Verifier -- \
-  http://localhost:<phoenix-port> withlove-giftshop <operation-id> <raw-user-id> <raw-workflow-id>
+  http://localhost:<phoenix-port> withlove-giftshop <operation-id> <raw-user-id> <raw-workflow-id> \
+  <capture-ai-content>
 ```
 
 Use a deterministic prompt that calls `search_products`; the command-line verifier validates that
 scenario rather than an arbitrary successful chat. It polls with both an attempt limit and a
 deadline, finds the one CHAIN using `chat.operation_id`, extracts its trace ID, and keeps polling
-while Phoenix has only partially ingested the trace. Success requires at least two MEAI LLM spans
-with model, token, and captured message data; a `search_products` TOOL span with identity, input,
-and output; a descendant RETRIEVER with document IDs; pseudonymous durable conversation and CHAIN
-identity; unique span IDs; one connected CHAIN ancestry; and no raw identifiers or
-`temporalWorkflowID`.
+while Phoenix has only partially ingested the trace. Pass `true` to require captured model, CHAIN,
+and TOOL content, or `false` to require redacted CHAIN, TOOL, and RETRIEVER payloads with model
+messages absent. Omitting the final argument preserves the original capture-enabled verifier mode.
+Both modes require at least two MEAI LLM spans with model and token data; a `search_products` TOOL;
+a descendant RETRIEVER with document IDs; pseudonymous durable conversation and CHAIN identity;
+unique span IDs; one connected CHAIN ancestry; and no raw identifiers or `temporalWorkflowID`.
+Anonymous chats may omit `user.id`; when present it must be pseudonymous.
