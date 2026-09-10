@@ -21,8 +21,15 @@ Chat message content is disabled when no capture setting is present. Setting
 the application-owned `chat.turn` CHAIN and `gen_ai.input.messages`,
 `gen_ai.output.messages`, and `gen_ai.system_instructions` on the existing durable model span.
 `OPENINFERENCE_HIDE_INPUTS` and `OPENINFERENCE_HIDE_OUTPUTS` override that opt-in per direction.
-The per-turn `chat.operation_id` is carried onto both spans so AX can correlate them even though the
-Temporal durable boundary does not preserve one physical trace tree for the entire workflow life.
+The custom Temporal update-context interceptor preserves the physical hierarchy from `chat.turn`
+through `UpdateWorkflow` to model, tool, and retriever spans. The per-turn `chat.operation_id` is
+also carried onto application and model spans as a secondary search and verification key.
+
+`QueryWorkflow:GetHistory` is intentionally excluded from trace export in `WithLove.Web`. History hydration probes a
+lazily created workflow, and Temporal represents the ordinary "not started" result as an exception
+whose message contains the raw workflow ID. Dropping only that query avoids a misleading error span
+and keeps the identifier out of the backend; other Temporal operations retain the configured
+sampling and export behavior.
 
 ## Destinations
 
@@ -107,8 +114,10 @@ version together. Never copy the committed local demo key into a deployment.
 
 `TelemetryVerification:ExposeOperationId` is false by default and is wired only on local runs.
 When explicitly enabled, the chat component clears the previous value before each turn and renders
-the completed turn's operation ID in a hidden `data-operation-id` attribute. This is a correlation
-identifier, not a user or workflow identity. It is not present in the Azure publish configuration.
+the completed turn's operation ID in a hidden `data-operation-id` attribute. The same opt-in enables
+GenAI message capture for Web and WorkflowServer so the verifier can inspect model input and output.
+This is a correlation identifier, not a user or workflow identity. Neither setting is present in
+the Azure publish configuration.
 
 After browser automation reads that value, verify the stored trace with:
 
@@ -117,8 +126,11 @@ dotnet run --project tools/WithLove.Telemetry.Verifier -- \
   http://localhost:<phoenix-port> withlove-giftshop <operation-id> <raw-user-id> <raw-workflow-id>
 ```
 
-The verifier polls with both an attempt limit and a deadline. It first finds the one CHAIN using
-`chat.operation_id`, extracts its trace ID, and keeps polling the trace query while Phoenix has only
-partially ingested it. A successful result requires each MEAI LLM span to descend from the CHAIN,
-at least one pseudonymous durable `conversation.id`, unique span IDs, pseudonymous CHAIN identity
-attributes, and the absence of both raw identifiers and `temporalWorkflowID`.
+Use a deterministic prompt that calls `search_products`; the command-line verifier validates that
+scenario rather than an arbitrary successful chat. It polls with both an attempt limit and a
+deadline, finds the one CHAIN using `chat.operation_id`, extracts its trace ID, and keeps polling
+while Phoenix has only partially ingested the trace. Success requires at least two MEAI LLM spans
+with model, token, and captured message data; a `search_products` TOOL span with identity, input,
+and output; a descendant RETRIEVER with document IDs; pseudonymous durable conversation and CHAIN
+identity; unique span IDs; one connected CHAIN ancestry; and no raw identifiers or
+`temporalWorkflowID`.

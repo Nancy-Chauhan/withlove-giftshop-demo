@@ -24,8 +24,7 @@ public static class OpenInferenceSpanExtensions
     /// <param name="name">The operation name for the span.</param>
     /// <param name="input">The optional textual input of the operation.</param>
     /// <param name="traceConfig">
-    /// Privacy configuration, resolved once here and retained by the scope. When omitted, the
-    /// nearest configuration attached to the current parent activity is inherited, then
+    /// Privacy configuration, resolved once here and retained by the scope. When omitted,
     /// <see cref="OpenInferenceTraceConfig.Default"/> is used.
     /// </param>
     /// <returns>A usable scope, including when <paramref name="source"/> has no listener.</returns>
@@ -45,9 +44,7 @@ public static class OpenInferenceSpanExtensions
         // required attributes.
         var initialTags = TextInputTags(input);
 
-        // Resolved once per scope rather than once per attribute: the low-level setters walk the
-        // parent chain and take a monitor on each candidate, and the typed path should pay that at
-        // most once.
+        // Resolve once per scope so every attribute uses one immutable privacy decision.
         var config = traceConfig ?? OpenInferenceTraceConfig.Default;
         var activity = source.StartOpenInferenceActivity(
             name,
@@ -70,8 +67,7 @@ public static class OpenInferenceSpanExtensions
     /// <param name="name">The operation name for the span.</param>
     /// <param name="query">The optional textual query the retrieval was performed with.</param>
     /// <param name="traceConfig">
-    /// Privacy configuration, resolved once here and retained by the scope. When omitted, the
-    /// nearest configuration attached to the current parent activity is inherited, then
+    /// Privacy configuration, resolved once here and retained by the scope. When omitted,
     /// <see cref="OpenInferenceTraceConfig.Default"/> is used.
     /// </param>
     /// <returns>A usable scope, including when <paramref name="source"/> has no listener.</returns>
