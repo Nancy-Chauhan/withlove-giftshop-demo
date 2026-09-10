@@ -73,7 +73,15 @@ public static class GiftShopChatRegistrationExtensions
         options.MaxToolCallsPerTurn = MaxToolCallsPerTurn;
         options.MaximumConsecutiveErrorsPerRequest = 3;
         options.MaxEntryCount = 1000;
-        options.EnableSearchAttributes = false;
+        // Upserts TurnCount (Long) and SessionCreatedAt (Datetime) at workflow start and after
+        // every completed turn. TurnCount distinguishes a started session with no completed turn
+        // from a real conversation; merely opening the panel starts no workflow. Replay-safe: the
+        // flag is read from the frozen workflow input, so in-flight runs and the recorded replay
+        // fixture keep their original value.
+        // Requires both attributes registered at namespace level:
+        //   temporal operator search-attribute create --name TurnCount --type Int
+        //   temporal operator search-attribute create --name SessionCreatedAt --type Datetime
+        options.EnableSearchAttributes = true;
         options.IncludeDetailedErrors = false;
     }
 }

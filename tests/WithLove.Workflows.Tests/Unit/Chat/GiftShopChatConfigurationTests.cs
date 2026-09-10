@@ -23,7 +23,10 @@ public class GiftShopChatConfigurationTests
         options.MaxToolCallsPerTurn.Should().Be(40);
         options.MaximumConsecutiveErrorsPerRequest.Should().Be(3);
         options.MaxEntryCount.Should().Be(1000);
-        options.EnableSearchAttributes.Should().BeFalse();
+        // Enabled deliberately: TurnCount/SessionCreatedAt distinguish a started session with no
+        // completed turn from a real conversation. Requires both attributes registered in every
+        // namespace the workflow runs in — see the AppHost and GiftShopChatTemporalFixture.
+        options.EnableSearchAttributes.Should().BeTrue();
         options.IncludeDetailedErrors.Should().BeFalse();
         options.RetryPolicy.Should().NotBeNull();
         options.RetryPolicy!.InitialInterval.Should().Be(TimeSpan.FromSeconds(2));

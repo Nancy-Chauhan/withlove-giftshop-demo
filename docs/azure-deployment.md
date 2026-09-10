@@ -100,7 +100,8 @@ attached only to the AX trace exporter.
 
 ## Step 2 — Register Temporal Cloud search attributes (one-time)
 
-WithLove uses two custom search attributes for workflow correlation. Register them in your Temporal Cloud namespace using `tcld`:
+WithLove uses four custom search attributes for workflow correlation and chat-session lifecycle
+queries. Register them in your Temporal Cloud namespace using `tcld`:
 
 ```bash
 tcld namespace search-attribute add \
@@ -112,6 +113,16 @@ tcld namespace search-attribute add \
   --namespace your-ns.acct \
   --search-attribute-name CustomerId \
   --search-attribute-type Keyword
+
+tcld namespace search-attribute add \
+  --namespace your-ns.acct \
+  --search-attribute-name TurnCount \
+  --search-attribute-type Int
+
+tcld namespace search-attribute add \
+  --namespace your-ns.acct \
+  --search-attribute-name SessionCreatedAt \
+  --search-attribute-type Datetime
 ```
 
 Alternatively, use the Temporal Cloud UI: **Namespace -> Search Attributes -> Add**.

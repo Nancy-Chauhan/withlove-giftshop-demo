@@ -25,11 +25,22 @@ public class ChatService(
     IGiftShopChatWorkflowClient workflowClient,
     AuthenticationStateProvider authStateProvider,
     ICartService cartService,
+    AnonymousChatSession anonymousChatSession,
     Instrumentation instrumentation,
     TelemetryIdentity telemetryIdentity,
     OpenInferenceTraceConfig openInferenceTraceConfig)
 {
     private const int MaxOutputTokens = 4000;
+
+    /// <summary>
+    /// Upper bound on how long End Chat waits for the run to finish closing.
+    /// </summary>
+    /// <remarks>
+    /// A shutdown signal only has to wake the workflow and let it unwind, so this is generous. If
+    /// it is ever hit, the workflow's own time-to-live remains the final cleanup bound; the user is
+    /// not made to wait on it.
+    /// </remarks>
+    private static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(5);
 
     private string? _workflowId;
     private bool _initialized;
@@ -56,11 +67,13 @@ public class ChatService(
         // definition. The workflow's update validator rejects a turn whose UserContext.UserId does
         // not resolve to Workflow.Info.WorkflowId, so a second copy of this format string here
         // would break every authenticated chat the moment the two drifted.
-        // An anonymous session has no user identity to bind, so it is keyed by an unguessable
-        // GUID that intentionally cannot collide with any real user ID.
+        // An anonymous session has no user identity to bind, so it is keyed by the unguessable
+        // 128-bit value carried in the wl-chat-id cookie, which intentionally cannot collide with
+        // any real user ID. Reading it from the cookie rather than minting one per circuit is what
+        // makes an anonymous conversation survive an F5, a second tab, or a dropped circuit.
         _workflowId = userId is not null
             ? GiftShopChatWorkflow.WorkflowIdFor(userId)
-            : GiftShopChatWorkflow.WorkflowIdFor($"anon-{Guid.NewGuid():N}");
+            : GiftShopChatWorkflow.WorkflowIdFor($"anon-{RequireAnonymousChatId()}");
         _sessionTelemetryId = telemetryIdentity.ForSession(_workflowId);
         _userTelemetryId = userId is null ? null : telemetryIdentity.ForUser(userId);
 
@@ -80,6 +93,37 @@ public class ChatService(
                 userId is not null ? "authenticated" : "anonymous"));
 
         _initialized = true;
+    }
+
+    /// <summary>
+    /// Returns the anonymous chat identity established during the HTTP request, or throws.
+    /// </summary>
+    /// <remarks>
+    /// There is deliberately no fallback here. The obvious one — mint a GUID when the cookie value
+    /// did not arrive, as <c>FusionCacheCartService</c> does for the cart — is the negation of this
+    /// feature: every visitor would get a fresh workflow and stable identity would appear
+    /// implemented while nothing reported that it was not.
+    /// <para>
+    /// An empty <c>ChatId</c> is not a user-facing condition. It means the middleware is
+    /// unregistered, the persistent-state registration was dropped, or the middleware was placed
+    /// after <c>MapRazorComponents</c> — a wiring bug that reproduces on the first page load in
+    /// development and never in production if development is correct. The throw is already
+    /// contained: <c>ChatFab.OpenChat</c> catches it, so only chat breaks, and it renders the
+    /// unavailable state rather than a working-looking empty panel.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The anonymous chat identity is missing.</exception>
+    private string RequireAnonymousChatId()
+    {
+        if (!string.IsNullOrEmpty(anonymousChatSession.ChatId))
+            return anonymousChatSession.ChatId;
+
+        instrumentation.ChatSessionIdentityFailures.Add(1);
+
+        throw new InvalidOperationException(
+            "The anonymous chat identity is missing, so a stable chat session cannot be derived. "
+            + $"Check that AnonymousChatMiddleware is registered before MapRazorComponents and "
+            + $"that {nameof(AnonymousChatSession)} is registered with RegisterPersistentService.");
     }
 
     /// <summary>Starts the workflow, or returns the currently running session.</summary>
@@ -109,7 +153,14 @@ public class ChatService(
         catch (Temporalio.Exceptions.RpcException exception)
             when (exception.Code == Temporalio.Exceptions.RpcException.StatusCode.NotFound)
         {
-            // The workflow does not exist yet, so there is no history to hydrate.
+            // The workflow does not exist yet, so there is no history to hydrate. This is the
+            // ordinary path now that the run starts lazily on the first message.
+        }
+        catch (Temporalio.Exceptions.WorkflowQueryRejectedException)
+        {
+            // The run under this ID is closed — ended by the customer, expired, or terminated — so
+            // its transcript is no longer something the model can see. Leaving Messages empty is
+            // the whole point of the NotOpen reject condition; see GetHistoryAsync.
         }
     }
 
@@ -277,7 +328,13 @@ public class ChatService(
         instrumentation.ChatTurnTokens.Record(totalTokens, completionTag);
     }
 
-    /// <summary>Ends the chat session by signaling the package workflow.</summary>
+    /// <summary>Ends the chat session by shutting the package workflow down.</summary>
+    /// <remarks>
+    /// The session ID is deliberately <em>not</em> rotated here. It cannot be — <c>wl-chat-id</c> is
+    /// <c>HttpOnly</c> and this runs inside a SignalR circuit with no <c>HttpResponse</c> — and it
+    /// does not need to be: closing the run is enough, because <c>GetHistoryAsync</c> refuses to
+    /// read a closed run, so reopening the panel under the same ID shows nothing.
+    /// </remarks>
     public async Task EndSessionAsync()
     {
         if (_workflowId is null)
@@ -285,11 +342,19 @@ public class ChatService(
 
         try
         {
-            await workflowClient.ShutdownAsync(_workflowId);
+            using var budget = new CancellationTokenSource(ShutdownBudget);
+            await workflowClient.ShutdownAsync(_workflowId, budget.Token);
         }
         catch (Temporalio.Exceptions.RpcException)
         {
-            // The workflow may already be completed.
+            // The workflow may already be completed, or never have started at all.
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation can happen while sending the signal or while waiting for the run to
+            // close, so delivery is not assumed. The customer asked to clear the conversation,
+            // therefore clear it — the workflow TTL is the fallback cleanup bound if Temporal is
+            // slow or unavailable.
         }
 
         Messages.Clear();

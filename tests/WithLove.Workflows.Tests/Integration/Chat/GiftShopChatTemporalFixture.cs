@@ -6,6 +6,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using TemporalCommunity.Extensions.AI;
+using Temporalio.Common;
 using Temporalio.Extensions.Hosting;
 using WithLove.OpenInference;
 using WithLove.WorkflowServer.Telemetry;
@@ -27,6 +28,15 @@ public sealed class GiftShopChatTemporalFixture : IAsyncLifetime
         Environment = await WorkflowEnvironment.StartLocalAsync(new()
         {
             DevServerOptions = new() { DownloadVersion = "v1.7.2" },
+            // Mirrors the AppHost declaration. ConfigureDurableExecution sets
+            // EnableSearchAttributes = true, so DurableChatWorkflowBase upserts these at start
+            // and after every turn; without them registered the upsert fails and every
+            // workflow-level test fails at the first turn rather than on an assertion.
+            SearchAttributes =
+            [
+                SearchAttributeKey.CreateLong("TurnCount"),
+                SearchAttributeKey.CreateDateTimeOffset("SessionCreatedAt"),
+            ],
         });
         Environment.Client.Options.DataConverter = DurableAIDataConverter.Instance;
     }
@@ -73,11 +83,18 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
         ScriptedGiftShopChatClient chatClient,
         Func<DurableChatWorkflowInput, DurableChatWorkflowInput>? transformInput = null,
         HttpMessageHandler? productsHandler = null,
-        OpenInferenceTraceConfig? traceConfig = null)
+        OpenInferenceTraceConfig? traceConfig = null,
+        string? taskQueue = null)
     {
         var targetHost = environment.Client.Connection.Options.TargetHost
             ?? throw new InvalidOperationException("Temporal target host is unavailable.");
-        var taskQueue = $"giftshop-chat-test-{Guid.NewGuid():N}";
+
+        // Random by default so concurrent harnesses cannot steal each other's tasks. A caller may
+        // pin it to WorkflowConstants.DefaultTaskQueue when the code under test is the production
+        // client — GiftShopChatWorkflowClient.EnsureStartedAsync hardcodes that queue, and routing
+        // around it would leave the very policies the test exists to exercise untested. Safe only
+        // because this collection disables parallelization.
+        taskQueue ??= $"giftshop-chat-test-{Guid.NewGuid():N}";
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddLogging();
         builder.Services.AddChatClient(

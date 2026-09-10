@@ -300,6 +300,14 @@ internal static partial class WithLoveApplicationExtensions
             [
                 SearchAttributeKey.CreateKeyword("StripeSessionId"),
                 SearchAttributeKey.CreateKeyword("CustomerId"),
+                // Required by GiftShopChatRegistrationExtensions' EnableSearchAttributes = true.
+                // DurableChatWorkflowBase upserts these at start and after every completed turn,
+                // distinguishing a started session with no completed turn from a real
+                // conversation. Merely opening the panel starts no workflow. Names and types are
+                // fixed by DurableSessionAttributes; they are not ours to choose.
+                // These cover local only — Azure/Cloud namespaces need them registered separately.
+                SearchAttributeKey.CreateLong("TurnCount"),
+                SearchAttributeKey.CreateDateTimeOffset("SessionCreatedAt"),
             ];
             options.DevServerOptions.DatabaseFilename = "/home/temporal/temporal.db";
         });

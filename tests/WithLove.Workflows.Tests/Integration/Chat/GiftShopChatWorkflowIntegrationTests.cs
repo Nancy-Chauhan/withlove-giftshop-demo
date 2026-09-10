@@ -19,6 +19,7 @@ using WebGiftShopChatWorkflowClient = WithLove.Web.Services.GiftShopChatWorkflow
 using WebInstrumentation = WithLove.Web.Services.Instrumentation;
 using WebWorkflowClient = WithLove.Web.Services.IGiftShopChatWorkflowClient;
 using WebCartService = WithLove.Web.Services.ICartService;
+using WebAnonymousChatSession = WithLove.Web.Services.AnonymousChatSession;
 
 namespace WithLove.Workflows.Tests.Integration.Chat;
 
@@ -355,6 +356,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WorkflowHandleChatClient(handle),
             authentication,
             cart,
+            new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
             instrumentation,
             CreateTelemetryIdentity(),
             OpenInferenceTraceConfig.Create(
@@ -425,6 +427,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WorkflowHandleChatClient(handle),
             authentication,
             cart,
+            new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
             instrumentation,
             CreateTelemetryIdentity(),
             OpenInferenceTraceConfig.Create(
@@ -989,8 +992,13 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             GetHistoryAsync(string workflowId) =>
             handle.QueryAsync(workflow => workflow.GetHistory());
 
-        public Task ShutdownAsync(string workflowId) =>
-            handle.SignalAsync(workflow => workflow.RequestShutdownAsync());
+        public async Task ShutdownAsync(
+            string workflowId,
+            CancellationToken cancellationToken = default)
+        {
+            await handle.SignalAsync(workflow => workflow.RequestShutdownAsync());
+            await handle.GetResultAsync();
+        }
     }
 }
 

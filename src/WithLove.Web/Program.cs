@@ -141,7 +141,8 @@ builder.Services.AddSingleton<Instrumentation>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents()
-    .RegisterPersistentService<AnonymousCartSession>(RenderMode.InteractiveServer);
+    .RegisterPersistentService<AnonymousCartSession>(RenderMode.InteractiveServer)
+    .RegisterPersistentService<AnonymousChatSession>(RenderMode.InteractiveServer);
 
 builder.Services.AddMemoryCache();
 var redisConnectionString = builder.Configuration.GetConnectionString("redisCache")
@@ -175,6 +176,7 @@ builder.Services.AddHttpClient<IProductService, ProductApiService>(client =>
 builder.Services.AddStripe();
 
 builder.Services.AddScoped<AnonymousCartSession>();
+builder.Services.AddScoped<AnonymousChatSession>();
 
 builder.Services.AddScoped<ICartService, FusionCacheCartService>();
 
@@ -188,6 +190,7 @@ builder.Services.AddScoped<ChatService>();
 builder.Services.AddSingleton(OpenInferenceTraceConfig.Default);
 builder.Services.AddSingleton(TelemetryIdentityFactory.Create(builder.Environment, builder.Configuration));
 builder.Services.AddScoped<IGiftShopChatWorkflowClient, GiftShopChatWorkflowClient>();
+builder.Services.AddScoped<ChatIdentityRotator>();
 
 builder.Services.AddScoped<ILoyaltyService, TemporalLoyaltyService>();
 
@@ -250,6 +253,11 @@ app.UseHttpsRedirection();
 
 app.UseMiddleware<AnonymousCartMiddleware>();
 
+// Immediately after the cart, and like it, before UseAuthentication — so it cannot see
+// context.User, which is exactly why it only mints and never rotates. Rotation happens at the two
+// places where the identity genuinely changes: Login.razor and the /logout endpoint below.
+app.UseMiddleware<AnonymousChatMiddleware>();
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -261,9 +269,18 @@ app.MapStripeWebhookHandler<StripeEventHandler>();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-app.MapPost("/logout", async (SignInManager<ShopUser> signInManager) =>
+app.MapPost("/logout", async (
+    HttpContext context,
+    SignInManager<ShopUser> signInManager,
+    ChatIdentityRotator chatIdentity) =>
 {
     await signInManager.SignOutAsync();
+
+    // The shared-machine case, and the load-bearing half of the rotation invariant. Without this,
+    // the next anonymous visitor on this browser inherits the pre-login wl-chat-id and resurrects a
+    // running transcript. RotateAsync never throws: a logout must not fail because chat is down.
+    await chatIdentity.RotateAsync(context);
+
     return Results.Redirect("/");
 });
 
