@@ -14,6 +14,7 @@ var result = await verifier.VerifyAsync(
     new Uri(phoenixUrl.EndsWith('/') ? phoenixUrl : phoenixUrl + '/'),
     projectName,
     operationId,
-    [rawUserId, rawWorkflowId]);
+    [rawUserId, rawWorkflowId],
+    PhoenixChatTraceExpectation.ProductSearch);
 Console.WriteLine($"Verified operation {operationId} in trace {result.TraceId} ({result.SpanCount} spans).");
 return 0;

@@ -42,6 +42,39 @@ public class PhoenixChatTraceVerifierTests
     }
 
     [Fact]
+    public async Task VerifyAsync_ProductSearchWaitsForToolRetrieverAndCompleteModelTelemetry()
+    {
+        var responses = new Queue<string>(
+        [
+            OperationResponseJson,
+            CompleteTraceResponseJson,
+            CompleteProductSearchTraceResponseJson,
+        ]);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responses.Dequeue(), Encoding.UTF8, "application/json"),
+        });
+        using var client = new HttpClient(handler);
+        var verifier = new PhoenixChatTraceVerifier(client, new()
+        {
+            MaxAttempts = 3,
+            RetryDelay = TimeSpan.Zero,
+            Deadline = TimeSpan.FromSeconds(1),
+        });
+
+        var result = await verifier.VerifyAsync(
+            new Uri("http://phoenix/"),
+            "withlove-giftshop",
+            "operation-123",
+            ["raw-user", "raw-workflow"],
+            PhoenixChatTraceExpectation.ProductSearch);
+
+        result.TraceId.Should().Be("trace-1");
+        result.SpanCount.Should().Be(6);
+        handler.RequestUris.Should().HaveCount(3);
+    }
+
+    [Fact]
     public async Task VerifyAsync_StopsAtConfiguredAttemptCount()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -122,6 +155,58 @@ public class PhoenixChatTraceVerifierTests
         DuplicateSpanIdTraceResponseJson,
     };
 
+    public static TheoryData<string> IncompleteProductSearchTraceCases => new()
+    {
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"span_kind\":\"LLM\",\"context\":{\"trace_id\":\"trace-1\",\"span_id\":\"llm-1\"}",
+            "\"span_kind\":\"INTERNAL\",\"context\":{\"trace_id\":\"trace-1\",\"span_id\":\"llm-1\"}",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"tool.name\":\"search_products\"",
+            "\"tool.name\":\"search_catalog\"",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"tool.id\":\"call-1\"",
+            "\"tool.missing_id\":\"call-1\"",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"input.value\":\"{query}\"",
+            "\"input.missing_value\":\"{query}\"",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"output.value\":\"results\"",
+            "\"output.missing_value\":\"results\"",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "retrieval.documents.0.document.id",
+            "retrieval.documents.0.document.missing_id",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "\"span_id\":\"retriever-1\"},\"parent_id\":\"tool-1\"",
+            "\"span_id\":\"retriever-1\"},\"parent_id\":\"durable-1\"",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "gen_ai.request.model",
+            "gen_ai.request.missing_model",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "gen_ai.usage.input_tokens",
+            "gen_ai.usage.missing_input_tokens",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "gen_ai.input.messages",
+            "gen_ai.missing.input_messages",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "gen_ai.output.messages",
+            "gen_ai.missing.output_messages",
+            StringComparison.Ordinal),
+        CompleteProductSearchTraceResponseJson.Replace(
+            "gen_ai.usage.output_tokens",
+            "gen_ai.usage.missing_output_tokens",
+            StringComparison.Ordinal),
+    };
+
     [Theory]
     [MemberData(nameof(IncompleteTraceCases))]
     public async Task VerifyAsync_DoesNotAcceptUnsafeOrDuplicatePartialTrace(string traceResponse)
@@ -147,6 +232,35 @@ public class PhoenixChatTraceVerifierTests
         handler.RequestUris.Should().HaveCount(2);
     }
 
+    [Theory]
+    [MemberData(nameof(IncompleteProductSearchTraceCases))]
+    public async Task VerifyAsync_ProductSearchRejectsIncompleteScenarioTelemetry(string traceResponse)
+    {
+        var responses = new Queue<string>([OperationResponseJson, traceResponse]);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responses.Dequeue(), Encoding.UTF8, "application/json"),
+        });
+        using var client = new HttpClient(handler);
+        var verifier = new PhoenixChatTraceVerifier(client, new()
+        {
+            MaxAttempts = 1,
+            RetryDelay = TimeSpan.Zero,
+            Deadline = TimeSpan.FromSeconds(1),
+        });
+
+        var action = () => verifier.VerifyAsync(
+            new Uri("http://phoenix/"),
+            "withlove-giftshop",
+            "operation-123",
+            [],
+            PhoenixChatTraceExpectation.ProductSearch);
+
+        await action.Should().ThrowAsync<TimeoutException>()
+            .WithMessage("*complete product-search trace*");
+        handler.RequestUris.Should().HaveCount(2);
+    }
+
     private const string OperationResponseJson = """
         {"data":[
           {"name":"chat.turn","span_kind":"CHAIN","context":{"trace_id":"trace-1","span_id":"chain-1"},"parent_id":null,
@@ -169,6 +283,25 @@ public class PhoenixChatTraceVerifierTests
            "attributes":{"conversation.id":"hmac-v1-session"}},
           {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-1"},"parent_id":"durable-1",
            "attributes":{"gen_ai.operation.name":"chat","gen_ai.request.model":"gpt"}}
+        ]}
+        """;
+
+    private const string CompleteProductSearchTraceResponseJson = """
+        {"data":[
+          {"name":"chat.turn","span_kind":"CHAIN","context":{"trace_id":"trace-1","span_id":"chain-1"},"parent_id":null,
+           "attributes":{"chat.operation_id":"operation-123","session.id":"hmac-v1-session","user.id":"hmac-v1-user"}},
+          {"name":"durable.turn","span_kind":"INTERNAL","context":{"trace_id":"trace-1","span_id":"durable-1"},"parent_id":"chain-1",
+           "attributes":{"conversation.id":"hmac-v1-session"}},
+          {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-1"},"parent_id":"durable-1",
+           "attributes":{"gen_ai.operation.name":"chat","gen_ai.request.model":"gpt","gen_ai.usage.input_tokens":12,"gen_ai.usage.output_tokens":4,
+                         "gen_ai.input.messages":"[{user}]","gen_ai.output.messages":"[{assistant-tool-call}]}"}},
+          {"name":"execute_tool search_products","span_kind":"TOOL","context":{"trace_id":"trace-1","span_id":"tool-1"},"parent_id":"durable-1",
+           "attributes":{"tool.name":"search_products","tool.id":"call-1","input.value":"{query}","output.value":"results"}},
+          {"name":"product.search","span_kind":"RETRIEVER","context":{"trace_id":"trace-1","span_id":"retriever-1"},"parent_id":"tool-1",
+           "attributes":{"retrieval.documents.0.document.id":"42"}},
+          {"name":"openai.chat","span_kind":"LLM","context":{"trace_id":"trace-1","span_id":"llm-2"},"parent_id":"durable-1",
+           "attributes":{"gen_ai.operation.name":"chat","gen_ai.response.model":"gpt","gen_ai.usage.input_tokens":20,"gen_ai.usage.output_tokens":8,
+                         "gen_ai.input.messages":"[{tool-result}]","gen_ai.output.messages":"[{assistant-final}]}"}}
         ]}
         """;
 

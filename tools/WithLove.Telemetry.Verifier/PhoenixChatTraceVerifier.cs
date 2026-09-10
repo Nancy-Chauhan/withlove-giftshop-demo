@@ -13,11 +13,13 @@ public sealed class PhoenixChatTraceVerifier(
         string projectName,
         string operationId,
         IReadOnlyCollection<string> forbiddenRawIdentifiers,
+        PhoenixChatTraceExpectation? expectation = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
         ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
         ArgumentNullException.ThrowIfNull(forbiddenRawIdentifiers);
+        var resolvedExpectation = expectation ?? PhoenixChatTraceExpectation.GenericChat;
 
         using var operationSpans = await PollAsync(
             phoenixBaseUri,
@@ -42,8 +44,12 @@ public sealed class PhoenixChatTraceVerifier(
         using var traceSpans = await PollAsync(
             phoenixBaseUri,
             $"v1/projects/{Uri.EscapeDataString(projectName)}/spans?trace_id={Uri.EscapeDataString(traceId)}",
-            root => HasCompleteChatStructure(root, traceId, chainSpanId),
-            "a CHAIN-ancestry MEAI LLM span with a pseudonymous conversation.id",
+            root => HasCompleteChatStructure(
+                root,
+                traceId,
+                chainSpanId,
+                resolvedExpectation),
+            resolvedExpectation.PollingDescription,
             cancellationToken);
         var spans = traceSpans.RootElement.GetProperty("data").EnumerateArray().ToArray();
         if (spans.Length == 0) throw new InvalidOperationException("Phoenix returned an empty trace.");
@@ -144,7 +150,8 @@ public sealed class PhoenixChatTraceVerifier(
     private static bool HasCompleteChatStructure(
         JsonElement root,
         string traceId,
-        string chainSpanId)
+        string chainSpanId,
+        PhoenixChatTraceExpectation expectation)
     {
         var spans = root.GetProperty("data").EnumerateArray().ToArray();
         if (spans.Length == 0
@@ -159,12 +166,119 @@ public sealed class PhoenixChatTraceVerifier(
             .Select(span => TryGetStringAttribute(span, "conversation.id"))
             .Where(value => value is not null)
             .ToArray();
-        return llmSpans.Length > 0
+        return llmSpans.Length >= expectation.MinimumLlmSpanCount
             && llmSpans.All(IsMeaiLlmSpan)
             && llmSpans.All(span => IsDescendantOf(span, chainSpanId, spans))
             && conversationIds.Length > 0
-            && conversationIds.All(value => value!.StartsWith("hmac-", StringComparison.Ordinal));
+            && conversationIds.All(value => value!.StartsWith("hmac-", StringComparison.Ordinal))
+            && MeetsScenarioExpectation(spans, llmSpans, chainSpanId, expectation);
     }
+
+    private static bool MeetsScenarioExpectation(
+        IReadOnlyCollection<JsonElement> spans,
+        IReadOnlyCollection<JsonElement> llmSpans,
+        string chainSpanId,
+        PhoenixChatTraceExpectation expectation)
+    {
+        if (expectation.RequireModelAndTokenAttributes
+            && llmSpans.Any(span => !HasModelAndTokenAttributes(span)))
+        {
+            return false;
+        }
+
+        if (expectation.RequireCapturedModelMessages
+            && llmSpans.Any(span => !HasCapturedModelExchange(span)))
+        {
+            return false;
+        }
+
+        if (expectation.ExpectedToolName is { } expectedToolName)
+        {
+            var matchingTools = spans
+                .Where(span => IsSpanKind(span, "TOOL"))
+                .Where(span => TryGetStringAttribute(span, "tool.name") == expectedToolName)
+                .ToArray();
+            if (matchingTools.Length == 0
+                || matchingTools.Any(span => !IsDescendantOf(span, chainSpanId, spans))
+                || matchingTools.Any(span => !HasNonEmptyStringAttribute(span, "tool.id"))
+                || matchingTools.Any(span => !HasNonEmptyStringAttribute(span, "input.value"))
+                || matchingTools.Any(span => !HasNonEmptyStringAttribute(span, "output.value")))
+            {
+                return false;
+            }
+        }
+
+        if (expectation.RequireRetriever)
+        {
+            var matchingTools = expectation.ExpectedToolName is { } retrieverToolName
+                ? spans
+                    .Where(span => IsSpanKind(span, "TOOL"))
+                    .Where(span => TryGetStringAttribute(span, "tool.name") == retrieverToolName)
+                    .ToArray()
+                : [];
+            var retrievers = spans
+                .Where(span => IsSpanKind(span, "RETRIEVER"))
+                .Where(span => IsDescendantOf(span, chainSpanId, spans))
+                .ToArray();
+            if (retrievers.Length == 0
+                || retrievers.All(span => !HasRetrievalDocumentId(span))
+                || matchingTools.Length > 0
+                && retrievers.All(retriever => matchingTools.All(tool =>
+                    !IsDescendantOf(retriever, GetSpanId(tool), spans))))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool HasModelAndTokenAttributes(JsonElement span) =>
+        HasAnyAttribute(span, "gen_ai.request.model", "gen_ai.response.model", "llm.model_name")
+        && HasAnyNumericAttribute(span, "gen_ai.usage.input_tokens", "llm.token_count.prompt")
+        && HasAnyNumericAttribute(span, "gen_ai.usage.output_tokens", "llm.token_count.completion");
+
+    private static bool HasCapturedModelExchange(JsonElement span) =>
+        HasAttributeOrPrefix(span, "gen_ai.input.messages", "llm.input_messages.")
+        && HasAttributeOrPrefix(span, "gen_ai.output.messages", "llm.output_messages.");
+
+    private static bool HasRetrievalDocumentId(JsonElement span) =>
+        span.TryGetProperty("attributes", out var attributes)
+        && attributes.EnumerateObject().Any(attribute =>
+            attribute.Name.StartsWith("retrieval.documents.", StringComparison.Ordinal)
+            && attribute.Name.EndsWith(".document.id", StringComparison.Ordinal)
+            && attribute.Value.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(attribute.Value.GetString()));
+
+    private static bool HasAnyAttribute(JsonElement span, params string[] names) =>
+        span.TryGetProperty("attributes", out var attributes)
+        && names.Any(name => attributes.TryGetProperty(name, out var value)
+            && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined);
+
+    private static bool HasAnyNumericAttribute(JsonElement span, params string[] names) =>
+        span.TryGetProperty("attributes", out var attributes)
+        && names.Any(name => attributes.TryGetProperty(name, out var value)
+            && value.ValueKind == JsonValueKind.Number);
+
+    private static bool HasAttributeOrPrefix(
+        JsonElement span,
+        string literalName,
+        string flattenedPrefix) =>
+        span.TryGetProperty("attributes", out var attributes)
+        && (attributes.TryGetProperty(literalName, out var literal)
+            && literal.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(literal.GetString())
+            || attributes.EnumerateObject().Any(attribute =>
+                attribute.Name.StartsWith(flattenedPrefix, StringComparison.Ordinal)));
+
+    private static bool HasNonEmptyStringAttribute(JsonElement span, string name) =>
+        TryGetStringAttribute(span, name) is { Length: > 0 };
+
+    private static bool IsSpanKind(JsonElement span, string kind) =>
+        string.Equals(
+            span.GetProperty("span_kind").GetString(),
+            kind,
+            StringComparison.Ordinal);
 
     private static bool IsLlmSpan(JsonElement span) =>
         span.GetProperty("span_kind").GetString() == "LLM";
@@ -232,3 +346,43 @@ public sealed record PhoenixPollingOptions
 }
 
 public sealed record PhoenixVerificationResult(string TraceId, int SpanCount);
+
+/// <summary>Describes the telemetry shape that must be present before verification succeeds.</summary>
+public sealed record PhoenixChatTraceExpectation
+{
+    /// <summary>Accepts a connected chat trace containing at least one MEAI-owned LLM span.</summary>
+    public static PhoenixChatTraceExpectation GenericChat { get; } = new();
+
+    /// <summary>
+    /// Requires the deterministic product-search path, including model exchanges, tool execution,
+    /// and backend retrieval.
+    /// </summary>
+    public static PhoenixChatTraceExpectation ProductSearch { get; } = new()
+    {
+        MinimumLlmSpanCount = 2,
+        ExpectedToolName = "search_products",
+        RequireRetriever = true,
+        RequireModelAndTokenAttributes = true,
+        RequireCapturedModelMessages = true,
+        PollingDescription = "a complete product-search trace with model, TOOL, and RETRIEVER telemetry",
+    };
+
+    /// <summary>Gets the minimum number of MEAI-owned LLM spans required in the trace.</summary>
+    public int MinimumLlmSpanCount { get; init; } = 1;
+
+    /// <summary>Gets the exact OpenInference tool name that must appear, if any.</summary>
+    public string? ExpectedToolName { get; init; }
+
+    /// <summary>Gets whether a descendant RETRIEVER with at least one document ID is required.</summary>
+    public bool RequireRetriever { get; init; }
+
+    /// <summary>Gets whether every LLM span must contain model and input/output token attributes.</summary>
+    public bool RequireModelAndTokenAttributes { get; init; }
+
+    /// <summary>Gets whether every LLM span must contain captured input and output messages.</summary>
+    public bool RequireCapturedModelMessages { get; init; }
+
+    /// <summary>Gets the description included in polling timeout diagnostics.</summary>
+    public string PollingDescription { get; init; } =
+        "a CHAIN-ancestry MEAI LLM span with a pseudonymous conversation.id";
+}

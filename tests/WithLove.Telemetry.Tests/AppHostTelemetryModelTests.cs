@@ -134,7 +134,7 @@ public class AppHostTelemetryModelTests
     }
 
     [Fact]
-    public async Task LocalVerificationOptIn_ExposesOperationIdOnlyToWeb()
+    public async Task LocalVerificationOptIn_ExposesOperationIdAndCapturesModelMessages()
     {
         var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.WithLove_AppHost>(
             args: ["TelemetryVerification:ExposeOperationId=true"]);
@@ -145,9 +145,21 @@ public class AppHostTelemetryModelTests
         {
             var environment = await ResolveEnvironmentAsync(service, builder.ExecutionContext);
             if (service.Name == "shopSite")
+            {
                 environment["TelemetryVerification__ExposeOperationId"].Should().Be("true");
-            else
+                environment["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"]
+                    .Should().Be("true");
+            }
+            else if (service.Name == "workflowServer")
+            {
                 environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
+                environment["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"]
+                    .Should().Be("true");
+            }
+            else
+            {
+                environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
+            }
         }
     }
 

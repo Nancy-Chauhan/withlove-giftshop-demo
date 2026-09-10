@@ -290,7 +290,15 @@ internal static partial class WithLoveApplicationExtensions
         // The DOM handoff is a local verification seam, not an application feature. It is absent
         // unless explicitly opted in and this local-only branch is never used for publishing.
         if (builder.Configuration.GetValue<bool>("TelemetryVerification:ExposeOperationId"))
+        {
             application.ShopSite.WithEnvironment("TelemetryVerification__ExposeOperationId", "true");
+            application.ShopSite.WithEnvironment(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+                "true");
+            application.WorkflowServer.WithEnvironment(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+                "true");
+        }
 
         var temporalServer = builder.AddTemporalDevContainer("temporal-server", options =>
         {
