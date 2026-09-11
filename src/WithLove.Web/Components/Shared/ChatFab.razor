@@ -71,13 +71,13 @@ else
                         </div>
                         <div class="flex flex-wrap gap-2">
                             <button class="px-3 py-1.5 bg-white border border-stone-200 hover:border-primary hover:text-primary text-xs text-stone-500 rounded-full transition-colors duration-300"
-                                    @onclick="() => SendQuickAction(QuickActionRomantic)">Romantic Gift</button>
+                                    @onclick="() => SendQuickAction(QuickActionRomantic)" disabled="@_isOpening">Romantic Gift</button>
                             <button class="px-3 py-1.5 bg-white border border-stone-200 hover:border-primary hover:text-primary text-xs text-stone-500 rounded-full transition-colors duration-300"
-                                    @onclick="() => SendQuickAction(QuickActionSympathy)">Sympathy</button>
+                                    @onclick="() => SendQuickAction(QuickActionSympathy)" disabled="@_isOpening">Sympathy</button>
                             <button class="px-3 py-1.5 bg-white border border-stone-200 hover:border-primary hover:text-primary text-xs text-stone-500 rounded-full transition-colors duration-300"
-                                    @onclick="() => SendQuickAction(QuickActionJustBecause)">Just Because</button>
+                                    @onclick="() => SendQuickAction(QuickActionJustBecause)" disabled="@_isOpening">Just Because</button>
                             <button class="px-3 py-1.5 bg-white border border-stone-200 hover:border-primary hover:text-primary text-xs text-stone-500 rounded-full transition-colors duration-300"
-                                    @onclick="() => SendQuickAction(QuickActionSelfCare)">Self-Care</button>
+                                    @onclick="() => SendQuickAction(QuickActionSelfCare)" disabled="@_isOpening">Self-Care</button>
                         </div>
                     </div>
                 </div>
@@ -136,10 +136,10 @@ else
                        @bind="_currentMessage"
                        @bind:event="oninput"
                        @onkeydown="HandleKeyDown"
-                       disabled="@(ChatService.IsThinking || _sessionUnavailable)"/>
+                       disabled="@(_isOpening || ChatService.IsThinking || _sessionUnavailable)"/>
                 <button class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 bg-primary text-white rounded-full flex items-center justify-center hover:bg-primary-dark transition-colors shadow-md shadow-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
                         @onclick="SendMessage"
-                        disabled="@(ChatService.IsThinking || _sessionUnavailable || string.IsNullOrWhiteSpace(_currentMessage))">
+                        disabled="@(_isOpening || ChatService.IsThinking || _sessionUnavailable || string.IsNullOrWhiteSpace(_currentMessage))">
                     <span class="material-symbols-outlined text-sm">send</span>
                 </button>
             </div>
@@ -154,6 +154,7 @@ else
     private const string QuickActionSelfCare = "Show me self-care gifts";
 
     private bool _isOpen;
+    private bool _isOpening;
     private bool _sessionUnavailable;
     private string _currentMessage = "";
     private ElementReference _messagesContainer;
@@ -172,6 +173,7 @@ else
     private async Task OpenChat()
     {
         _isOpen = true;
+        _isOpening = true;
         _needsScrollToBottom = true;
         _sessionUnavailable = false;
 
@@ -194,6 +196,10 @@ else
             _sessionUnavailable = true;
             Logger.LogError(exception, "Could not open the chat session.");
         }
+        finally
+        {
+            _isOpening = false;
+        }
     }
 
     private void CloseChat()
@@ -213,6 +219,8 @@ else
         }
 
         _currentMessage = "";
+        _isOpen = false;
+        _sessionUnavailable = false;
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
@@ -227,7 +235,11 @@ else
     {
         // Checked again here so a stray invoke while a turn is in flight does not discard
         // whatever the customer has typed. SendTurnAsync holds the authoritative guard.
-        if (string.IsNullOrWhiteSpace(_currentMessage) || ChatService.IsThinking) return;
+        if (_isOpening || ChatService.IsThinking || _sessionUnavailable
+            || string.IsNullOrWhiteSpace(_currentMessage))
+        {
+            return;
+        }
 
         var message = _currentMessage.Trim();
         _currentMessage = "";
@@ -237,6 +249,11 @@ else
 
     private async Task SendQuickAction(string message)
     {
+        if (_isOpening || ChatService.IsThinking || _sessionUnavailable)
+        {
+            return;
+        }
+
         _currentMessage = "";
 
         await SendTurnAsync(message);
@@ -248,10 +265,9 @@ else
     /// </summary>
     private async Task SendTurnAsync(string message)
     {
-        // The composer is already disabled while the session is unavailable; this is the
-        // authoritative guard, so a stray invoke cannot send into a session that was never
-        // established.
-        if (ChatService.IsThinking || _sessionUnavailable) return;
+        // The composer is disabled while initialization is in progress or the session is
+        // unavailable. This remains the authoritative guard so a stray invoke cannot dispatch.
+        if (_isOpening || ChatService.IsThinking || _sessionUnavailable) return;
 
         // Show user message + thinking indicator immediately
         ChatService.Messages.Add(new ChatHistoryEntry(true, message, DateTime.UtcNow));

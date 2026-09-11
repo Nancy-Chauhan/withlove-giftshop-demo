@@ -24,6 +24,7 @@ public class ChatServiceTests : IDisposable
     private readonly AuthenticationStateProvider _authentication =
         A.Fake<AuthenticationStateProvider>();
     private readonly ICartService _cart = A.Fake<ICartService>();
+    private readonly ILogger<ChatService> _logger = A.Fake<ILogger<ChatService>>();
 
     // Stands in for the wl-chat-id cookie that AnonymousChatMiddleware puts on the circuit. Real
     // shape — 32 lowercase hex characters — so anything asserting on the derived workflow ID sees
@@ -92,6 +93,78 @@ public class ChatServiceTests : IDisposable
         result.OperationId.Should().Be(capturedUpdateId);
         result.NavigationActions.Should().ContainSingle(action => action.Url == "/cart");
         A.CallTo(() => _cart.AddItemAsync(A<CartItem>.That.Matches(item => item.ProductId == 7)))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_WithoutExplicitInitialization_InitializesBeforeDispatch()
+    {
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Returns(FinalResult("Ready.", GiftShopChatTurnState.Create([])));
+        var service = CreateService();
+
+        var result = await service.SendMessageAsync("Hello");
+
+        result.AssistantMessage.Should().Be("Ready.");
+        A.CallTo(() => _authentication.GetAuthenticationStateAsync())
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => _workflowClient.EnsureStartedAsync(
+                $"giftshop-chat-anon-{_chatSession.ChatId}"))
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                $"giftshop-chat-anon-{_chatSession.ChatId}",
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .MustHaveHappenedOnceExactly();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task SendMessage_DuringInitialization_WaitsForTheSingleInitialization()
+    {
+        var authenticationReady = new TaskCompletionSource<AuthenticationState>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        A.CallTo(() => _authentication.GetAuthenticationStateAsync())
+            .Returns(authenticationReady.Task);
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .Returns(FinalResult("Ready.", GiftShopChatTurnState.Create([])));
+        var service = CreateService();
+
+        var initialize = service.InitializeAsync();
+        var send = service.SendMessageAsync("Hello");
+
+        initialize.IsCompleted.Should().BeFalse();
+        send.IsCompleted.Should().BeFalse();
+        A.CallTo(() => _authentication.GetAuthenticationStateAsync())
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                A<string>._,
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
+            .MustNotHaveHappened();
+
+        authenticationReady.SetResult(
+            new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
+        await Task.WhenAll(initialize, send);
+
+        A.CallTo(() => _authentication.GetAuthenticationStateAsync())
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => _workflowClient.EnsureStartedAsync(
+                $"giftshop-chat-anon-{_chatSession.ChatId}"))
+            .MustHaveHappenedOnceExactly();
+        A.CallTo(() => _workflowClient.SendMessageAsync(
+                $"giftshop-chat-anon-{_chatSession.ChatId}",
+                A<string>._,
+                A<DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState>>._))
             .MustHaveHappenedOnceExactly();
     }
 
@@ -646,7 +719,8 @@ public class ChatServiceTests : IDisposable
             new AnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
             _instrumentation,
             TestTelemetryIdentity,
-            VisibleContent);
+            VisibleContent,
+            _logger);
         var otherVisitor = CreateService();
 
         await visitor.InitializeAsync();
@@ -894,7 +968,8 @@ public class ChatServiceTests : IDisposable
             _chatSession,
             _instrumentation,
             TestTelemetryIdentity,
-            VisibleContent);
+            VisibleContent,
+            _logger);
 
     private static DurableTurnResult<GiftShopChatTurnState> FinalResult(
         string assistantMessage,

@@ -28,7 +28,8 @@ public class ChatService(
     AnonymousChatSession anonymousChatSession,
     Instrumentation instrumentation,
     TelemetryIdentity telemetryIdentity,
-    OpenInferenceTraceConfig openInferenceTraceConfig)
+    OpenInferenceTraceConfig openInferenceTraceConfig,
+    ILogger<ChatService> logger)
 {
     private const int MaxOutputTokens = 4000;
 
@@ -47,6 +48,7 @@ public class ChatService(
     private UserContext? _userContext;
     private string? _sessionTelemetryId;
     private string? _userTelemetryId;
+    private readonly SemaphoreSlim _initializationGate = new(1, 1);
 
     /// <summary>Chat messages for UI rendering.</summary>
     public List<ChatHistoryEntry> Messages { get; } = [];
@@ -57,42 +59,62 @@ public class ChatService(
     /// <summary>Determines the session workflow ID based on authentication state.</summary>
     public async Task InitializeAsync()
     {
-        if (_initialized)
-            return;
+        await _initializationGate.WaitAsync();
+        try
+        {
+            if (_initialized)
+                return;
 
-        var auth = await authStateProvider.GetAuthenticationStateAsync();
-        var userId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            logger.ChatSessionInitializationStarted();
 
-        // Built through GiftShopChatWorkflow.WorkflowIdFor so the session ID has exactly one
-        // definition. The workflow's update validator rejects a turn whose UserContext.UserId does
-        // not resolve to Workflow.Info.WorkflowId, so a second copy of this format string here
-        // would break every authenticated chat the moment the two drifted.
-        // An anonymous session has no user identity to bind, so it is keyed by the unguessable
-        // 128-bit value carried in the wl-chat-id cookie, which intentionally cannot collide with
-        // any real user ID. Reading it from the cookie rather than minting one per circuit is what
-        // makes an anonymous conversation survive an F5, a second tab, or a dropped circuit.
-        _workflowId = userId is not null
-            ? GiftShopChatWorkflow.WorkflowIdFor(userId)
-            : GiftShopChatWorkflow.WorkflowIdFor($"anon-{RequireAnonymousChatId()}");
-        _sessionTelemetryId = telemetryIdentity.ForSession(_workflowId);
-        _userTelemetryId = userId is null ? null : telemetryIdentity.ForUser(userId);
+            try
+            {
+                var auth = await authStateProvider.GetAuthenticationStateAsync();
+                var userId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
-        var name = auth.User.FindFirst(ClaimTypes.Name)?.Value
-                   ?? auth.User.FindFirst(ClaimTypes.GivenName)?.Value;
+                // Built through GiftShopChatWorkflow.WorkflowIdFor so the session ID has exactly one
+                // definition. The workflow's update validator rejects a turn whose UserContext.UserId does
+                // not resolve to Workflow.Info.WorkflowId, so a second copy of this format string here
+                // would break every authenticated chat the moment the two drifted.
+                // An anonymous session has no user identity to bind, so it is keyed by the unguessable
+                // 128-bit value carried in the wl-chat-id cookie, which intentionally cannot collide with
+                // any real user ID. Reading it from the cookie rather than minting one per circuit is what
+                // makes an anonymous conversation survive an F5, a second tab, or a dropped circuit.
+                _workflowId = userId is not null
+                    ? GiftShopChatWorkflow.WorkflowIdFor(userId)
+                    : GiftShopChatWorkflow.WorkflowIdFor($"anon-{RequireAnonymousChatId()}");
+                _sessionTelemetryId = telemetryIdentity.ForSession(_workflowId);
+                _userTelemetryId = userId is null ? null : telemetryIdentity.ForUser(userId);
 
-        // The email claim is deliberately not read. UserContext is serialized into Temporal
-        // workflow history on every model step and every tool call, and history is append-only —
-        // so only data with a real server-side consumer is allowed to travel on it.
-        if (name is not null || userId is not null)
-            _userContext = new UserContext(name, userId);
+                var name = auth.User.FindFirst(ClaimTypes.Name)?.Value
+                           ?? auth.User.FindFirst(ClaimTypes.GivenName)?.Value;
 
-        instrumentation.ChatSessionsStarted.Add(
-            1,
-            new KeyValuePair<string, object?>(
-                "auth_type",
-                userId is not null ? "authenticated" : "anonymous"));
+                // The email claim is deliberately not read. UserContext is serialized into Temporal
+                // workflow history on every model step and every tool call, and history is append-only —
+                // so only data with a real server-side consumer is allowed to travel on it.
+                if (name is not null || userId is not null)
+                    _userContext = new UserContext(name, userId);
 
-        _initialized = true;
+                instrumentation.ChatSessionsStarted.Add(
+                    1,
+                    new KeyValuePair<string, object?>(
+                        "auth_type",
+                        userId is not null ? "authenticated" : "anonymous"));
+
+                _initialized = true;
+                logger.ChatSessionInitializationCompleted();
+            }
+            catch (Exception exception)
+            {
+                ResetInitializationState();
+                logger.ChatSessionInitializationFailed(exception);
+                throw;
+            }
+        }
+        finally
+        {
+            _initializationGate.Release();
+        }
     }
 
     /// <summary>
@@ -170,13 +192,16 @@ public class ChatService(
     /// </summary>
     public async Task<ChatMessageResult> SendMessageAsync(string message)
     {
-        if (_workflowId is null)
-            throw new InvalidOperationException("Call InitializeAsync first.");
-
         // Correlation only — this is a telemetry and log-stitching key, not an idempotency key.
         // A fresh GUID per call can never deduplicate anything, so it must not be used as a
         // Temporal Update ID; doing so advertises a safety guarantee that does not exist.
         var operationId = Guid.NewGuid().ToString("N");
+        logger.ChatTurnRequested(operationId, initializationRequired: !_initialized);
+        await InitializeAsync();
+
+        if (_workflowId is null)
+            throw new InvalidOperationException("Chat initialization completed without a workflow ID.");
+
         var completion = "Failed";
         UsageDetails? usage = null;
         var stopwatch = Stopwatch.StartNew();
@@ -358,6 +383,11 @@ public class ChatService(
         }
 
         Messages.Clear();
+        ResetInitializationState();
+    }
+
+    private void ResetInitializationState()
+    {
         _workflowId = null;
         _sessionTelemetryId = null;
         _userTelemetryId = null;
