@@ -10,7 +10,7 @@ The project provides the OpenInference helpers that this sample uses on top of
 - generated attribute constants;
 - resource configuration for `openinference.project.name`;
 - session and user context propagation; and
-- `OPENINFERENCE_HIDE_INPUTS` and `OPENINFERENCE_HIDE_OUTPUTS` content controls.
+- application-controlled AI content protection.
 
 The durable-chat integration owns model spans and Microsoft.Extensions.AI owns embedding spans in
 WithLove. Application code uses this project for higher-level spans such as the chat `CHAIN` and
@@ -40,10 +40,8 @@ to `session.id`, `user.id`, or `conversation.id`.
 Sensitive inputs and outputs are disabled by default. The AppHost-level
 `Telemetry:CaptureAiContent=true` setting explicitly authorizes both directions for the chat CHAIN,
 the existing durable model span, and TOOL payloads. It is passed to services as
-`Telemetry__CaptureAiContent`. A missing or `false` value keeps content hidden and cannot be
-overridden by `OpenInferenceOptions`. `OPENINFERENCE_HIDE_INPUTS`, `OPENINFERENCE_HIDE_OUTPUTS`, and
-explicit hide options remain additional restrictions when capture is authorized. Any
-content-capture change must preserve the trace privacy contract documented in `docs/telemetry.md`.
+`Telemetry__CaptureAiContent`. A missing or `false` value keeps content hidden. Any content-capture
+change must preserve the trace privacy contract documented in `docs/telemetry.md`.
 
 ## Generated source
 

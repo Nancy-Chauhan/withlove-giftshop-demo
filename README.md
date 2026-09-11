@@ -78,16 +78,11 @@ Configuration keys use `:` in configuration and `__` in environment-variable for
 |---|---|---|
 | `Arize:TraceDestination` / `Arize__TraceDestination` | Phoenix locally; AX when published | Selects `Phoenix` or `Ax` for traces only. The two exporters are mutually exclusive. |
 | `Telemetry:CaptureAiContent` / `Telemetry__CaptureAiContent` | `false` | Application-level authorization for sensitive AI payload export. This is what `--capture` sets. |
-| `OPENINFERENCE_HIDE_INPUTS` | Effective when set to `true` | Additional input restriction. It can redact inputs after capture is authorized, but `false` cannot authorize capture by itself. |
-| `OPENINFERENCE_HIDE_OUTPUTS` | Effective when set to `true` | Additional output restriction with the same deny-only behavior. |
-| `TelemetryVerification:ExposeOperationId` / `TelemetryVerification__ExposeOperationId` | `false` | Local verification seam that emits a completed turn's correlation ID in hidden DOM metadata. It does not enable content capture. |
 
 `Telemetry:CaptureAiContent` is the only setting that can authorize AI payload capture. It defaults
-to `false`, and explicit OpenInference options cannot enable capture by themselves. With capture
-authorized, either `OPENINFERENCE_HIDE_INPUTS=true` or `OPENINFERENCE_HIDE_OUTPUTS=true` can
-independently restrict that direction when supplied to the instrumented service process. AX
-credentials are attached only to the AX trace exporter and are not sent to Aspire's log or metric
-exporters.
+to `false`; set it to `true` only when the exported prompts, responses, and tool payloads are safe
+for the selected tracing backend. AX credentials are attached only to the AX trace exporter and are
+not sent to Aspire's log or metric exporters.
 
 > `Parameters:stripe-webhook-secret` is **not** set locally. The Stripe CLI container runs
 > `stripe listen` and supplies a fresh signing secret each session. It is a publish/Azure-only
