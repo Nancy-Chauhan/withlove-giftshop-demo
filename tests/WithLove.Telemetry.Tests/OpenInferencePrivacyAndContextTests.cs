@@ -34,12 +34,12 @@ public class OpenInferencePrivacyAndContextTests
     }
 
     [Fact]
-    public void ApplicationCaptureDenial_OverridesLegacyOptInAndExplicitUnhideOptions()
+    public void ApplicationCaptureDenial_OverridesStandardOptInAndExplicitUnhideOptions()
     {
         static string? Environment(string name) => name switch
         {
             OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => "false",
-            OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable => "true",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" => "true",
             _ => null
         };
 
@@ -52,19 +52,19 @@ public class OpenInferencePrivacyAndContextTests
     }
 
     [Fact]
-    public void MissingApplicationPolicy_RetainsLegacyAndExplicitOptionCompatibility()
+    public void MissingApplicationPolicy_DefaultsToHiddenAndCannotBeBypassed()
     {
         static string? Environment(string name) =>
-            name == OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable ? "true" : null;
+            name == "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" ? "true" : null;
 
-        var legacyCapture = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
+        var standardOptIn = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
         var explicitDirections = OpenInferenceTraceConfig.Create(
-            new OpenInferenceOptions { HideInputs = false, HideOutputs = true },
+            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
             static _ => null);
 
-        legacyCapture.HideInputs.Should().BeFalse();
-        legacyCapture.HideOutputs.Should().BeFalse();
-        explicitDirections.HideInputs.Should().BeFalse();
+        standardOptIn.HideInputs.Should().BeTrue();
+        standardOptIn.HideOutputs.Should().BeTrue();
+        explicitDirections.HideInputs.Should().BeTrue();
         explicitDirections.HideOutputs.Should().BeTrue();
     }
 

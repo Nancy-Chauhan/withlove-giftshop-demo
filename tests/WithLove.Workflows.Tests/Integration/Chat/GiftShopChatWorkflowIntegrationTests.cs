@@ -127,7 +127,9 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
         {
             HideInputs = false,
             HideOutputs = false,
-        });
+        }, static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+            ? "true"
+            : null);
         await using var harness = await GiftShopChatWorkerHarness.StartAsync(
             fixture.Environment,
             chatClient,
@@ -360,7 +362,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             instrumentation,
             CreateTelemetryIdentity(),
             OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false }));
+                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
+                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+                    ? "true"
+                    : null));
         await chatService.InitializeAsync();
 
         var result = await chatService.SendMessageAsync("Keep adding the keepsake");
@@ -431,7 +436,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             instrumentation,
             CreateTelemetryIdentity(),
             OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false }));
+                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
+                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+                    ? "true"
+                    : null));
         await chatService.InitializeAsync();
 
         var incomplete = await chatService.SendMessageAsync("Add the keepsake");

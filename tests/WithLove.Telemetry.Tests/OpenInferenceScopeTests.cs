@@ -8,7 +8,9 @@ public class OpenInferenceScopeTests
 {
     private static readonly OpenInferenceTraceConfig VisibleContent = OpenInferenceTraceConfig.Create(
         new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-        static _ => null);
+        static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+            ? "true"
+            : null);
 
     [Fact]
     public void Chain_HidingMode_ExportsContextAndRedactsContent()
@@ -45,7 +47,7 @@ public class OpenInferenceScopeTests
     }
 
     [Fact]
-    public void Chain_ApplicationCaptureDenialRedactsDespiteLegacyAndCodeOptIns()
+    public void Chain_ApplicationCaptureDenialRedactsDespiteStandardAndCodeOptIns()
     {
         using var source = new ActivitySource("withlove-test-chain-master-private");
         Activity? stopped = null;
@@ -55,7 +57,7 @@ public class OpenInferenceScopeTests
             name => name switch
             {
                 OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => "false",
-                OpenInferenceTraceConfig.CaptureMessageContentEnvironmentVariable => "true",
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" => "true",
                 _ => null,
             });
 

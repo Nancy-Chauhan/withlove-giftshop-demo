@@ -118,7 +118,9 @@ public class OpenInferenceToolFunctionTests
         {
             HideInputs = false,
             HideOutputs = false,
-        });
+        }, static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+            ? "true"
+            : null);
 
     private static Activity? StartToolActivity(ActivitySource source) =>
         source.StartActivity(

@@ -15,10 +15,6 @@ public sealed class OpenInferenceTraceConfig
     /// <summary>Gets the application-level environment variable that authorizes AI content capture.</summary>
     public const string CaptureAiContentEnvironmentVariable = "Telemetry__CaptureAiContent";
 
-    /// <summary>Gets the standard GenAI instrumentation environment variable for message capture.</summary>
-    public const string CaptureMessageContentEnvironmentVariable =
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
-
     /// <summary>Gets configuration resolved from the current process environment.</summary>
     public static OpenInferenceTraceConfig Default { get; } = Create();
 
@@ -31,30 +27,29 @@ public sealed class OpenInferenceTraceConfig
     private OpenInferenceTraceConfig(OpenInferenceOptions options, Func<string, string?> environment)
     {
         var applicationCapture = ResolveApplicationCapture(environment);
-        if (applicationCapture is false)
+        if (applicationCapture is not true)
         {
             HideInputs = true;
             HideOutputs = true;
             return;
         }
 
-        var captureMessageContent = applicationCapture
-            ?? (bool.TryParse(environment(CaptureMessageContentEnvironmentVariable), out var capture)
-                && capture);
-
         HideInputs = Resolve(
             options.HideInputs,
             HideInputsEnvironmentVariable,
-            defaultValue: !captureMessageContent,
+            defaultValue: false,
             environment);
         HideOutputs = Resolve(
             options.HideOutputs,
             HideOutputsEnvironmentVariable,
-            defaultValue: !captureMessageContent,
+            defaultValue: false,
             environment);
     }
 
-    /// <summary>Creates an immutable configuration. Explicit options override environment variables.</summary>
+    /// <summary>
+    /// Creates an immutable configuration. Application capture must first be authorized; explicit
+    /// options then override the corresponding OpenInference hide environment variables.
+    /// </summary>
     public static OpenInferenceTraceConfig Create(
         OpenInferenceOptions? options = null,
         Func<string, string?>? getEnvironmentVariable = null) =>

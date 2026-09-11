@@ -17,7 +17,9 @@ public class ChatServiceTests : IDisposable
 {
     private static readonly OpenInferenceTraceConfig VisibleContent = OpenInferenceTraceConfig.Create(
         new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-        _ => null);
+        static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+            ? "true"
+            : null);
     private static readonly TelemetryIdentity TestTelemetryIdentity = TelemetryIdentity.Create(
         Convert.ToBase64String(Enumerable.Range(1, 32).Select(value => (byte)value).ToArray()),
         "test-v1");

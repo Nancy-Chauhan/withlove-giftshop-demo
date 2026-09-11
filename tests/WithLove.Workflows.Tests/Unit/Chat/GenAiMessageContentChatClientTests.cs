@@ -35,7 +35,10 @@ public class GenAiMessageContentChatClientTests
                 },
             ]),
             OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false }));
+                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
+                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+                    ? "true"
+                    : null));
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var update in client.GetStreamingResponseAsync(

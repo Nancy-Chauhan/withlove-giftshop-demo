@@ -15,7 +15,7 @@ internal static partial class WithLoveApplicationExtensions
     private const string ArizeTraceDestinationConfigurationKey = "Arize:TraceDestination";
     private const string CaptureAiContentConfigurationKey = "Telemetry:CaptureAiContent";
     private const string CaptureAiContentEnvironmentVariable = "Telemetry__CaptureAiContent";
-    private const string GenAiCaptureMessageContentEnvironmentVariable =
+    private const string AspireGenAiCaptureMessageContentEnvironmentVariable =
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT";
     private const string DeploymentTelemetryIdentityKeyVersion = "v1";
     private const string StripeWebhookSecretParameterName = "stripe-webhook-secret";
@@ -358,16 +358,21 @@ internal static partial class WithLoveApplicationExtensions
         WithLoveApplication application,
         bool captureAiContent)
     {
-        var value = captureAiContent ? "true" : "false";
-        application.ProductsApi
-            .WithEnvironment(CaptureAiContentEnvironmentVariable, "false")
-            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, "false");
-        application.ShopSite
-            .WithEnvironment(CaptureAiContentEnvironmentVariable, value)
-            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, value);
-        application.WorkflowServer
-            .WithEnvironment(CaptureAiContentEnvironmentVariable, value)
-            .WithEnvironment(GenAiCaptureMessageContentEnvironmentVariable, value);
+        Configure(application.ProductsApi, capture: false);
+        Configure(application.ShopSite, captureAiContent);
+        Configure(application.WorkflowServer, captureAiContent);
+
+        static void Configure(IResourceBuilder<ProjectResource> resource, bool capture)
+        {
+            resource
+                .WithEnvironment(CaptureAiContentEnvironmentVariable, capture ? "true" : "false")
+                // Aspire project resources enable the generic GenAI content switch by default.
+                // WithLove owns content authorization, so remove the framework switch rather than
+                // exposing a second control that could bypass the application policy.
+                .WithEnvironment(context =>
+                    context.EnvironmentVariables.Remove(
+                        AspireGenAiCaptureMessageContentEnvironmentVariable));
+        }
     }
 
     private static void ConfigureTraceDestination(

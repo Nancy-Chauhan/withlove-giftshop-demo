@@ -241,6 +241,6 @@ public class AppHostTelemetryModelTests
 
         var expected = expectedCapture.Value ? "true" : "false";
         environment[applicationSetting].Should().Be(expected);
-        environment[standardSetting].Should().Be(expected);
+        environment.Should().NotContainKey(standardSetting);
     }
 }
