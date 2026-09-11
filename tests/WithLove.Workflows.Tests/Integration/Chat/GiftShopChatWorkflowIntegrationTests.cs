@@ -342,20 +342,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             chatClient);
         var workflowId = $"giftshop-chat-limit-{Guid.NewGuid():N}";
         var handle = await StartWorkflowAsync(harness, workflowId);
-        var authentication = A.Fake<AuthenticationStateProvider>();
-        A.CallTo(() => authentication.GetAuthenticationStateAsync())
-            .Returns(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
         var cart = A.Fake<WebCartService>();
         A.CallTo(() => cart.Items).Returns(Array.Empty<CartItem>());
         using var instrumentation = new WebInstrumentation();
-        var chatService = new WebChatService(
-            new WorkflowHandleChatClient(handle),
-            authentication,
-            cart,
-            new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
-            instrumentation,
-            CreateTelemetryIdentity(),
-            OpenInferenceTraceConfig.Enabled);
+        var chatService = CreateWebChatService(handle, cart, instrumentation);
         await chatService.InitializeAsync();
 
         var result = await chatService.SendMessageAsync("Keep adding the keepsake");
@@ -412,20 +402,10 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             chatClient);
         var workflowId = $"giftshop-chat-incomplete-{Guid.NewGuid():N}";
         var handle = await StartWorkflowAsync(harness, workflowId);
-        var authentication = A.Fake<AuthenticationStateProvider>();
-        A.CallTo(() => authentication.GetAuthenticationStateAsync())
-            .Returns(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
         var cart = A.Fake<WebCartService>();
         A.CallTo(() => cart.Items).Returns(Array.Empty<CartItem>());
         using var instrumentation = new WebInstrumentation();
-        var chatService = new WebChatService(
-            new WorkflowHandleChatClient(handle),
-            authentication,
-            cart,
-            new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
-            instrumentation,
-            CreateTelemetryIdentity(),
-            OpenInferenceTraceConfig.Enabled);
+        var chatService = CreateWebChatService(handle, cart, instrumentation);
         await chatService.InitializeAsync();
 
         var incomplete = await chatService.SendMessageAsync("Add the keepsake");
@@ -689,6 +669,26 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
         await fixture.Environment.Client.StartWorkflowAsync(
             (GiftShopChatWorkflow workflow) => workflow.RunAsync(harness.WorkflowInput),
             new WorkflowOptions(workflowId, harness.TaskQueue));
+
+    private static WebChatService CreateWebChatService(
+        WorkflowHandle<GiftShopChatWorkflow> handle,
+        WebCartService cart,
+        WebInstrumentation instrumentation)
+    {
+        var authentication = A.Fake<AuthenticationStateProvider>();
+        A.CallTo(() => authentication.GetAuthenticationStateAsync())
+            .Returns(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity())));
+
+        return new WebChatService(
+            new WorkflowHandleChatClient(handle),
+            authentication,
+            cart,
+            new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
+            instrumentation,
+            CreateTelemetryIdentity(),
+            OpenInferenceTraceConfig.Enabled,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WebChatService>.Instance);
+    }
 
     private static DurableTurnRequest<GiftShopChatRequestData, GiftShopChatTurnState> CreateRequest(
         string operationId,
