@@ -16,8 +16,8 @@ namespace WithLove.WorkflowServer.Telemetry;
 /// <remarks>
 /// This client deliberately does not start an activity. Starting another activity here would
 /// duplicate the model span, including its latency and token accounting. Message content is
-/// attached only when the current activity is a recording GenAI chat activity and the resolved
-/// OpenInference privacy configuration permits the corresponding direction.
+/// attached only when the current activity is a recording GenAI chat activity and application
+/// content capture is enabled.
 /// </remarks>
 internal sealed class GenAiMessageContentChatClient(
     IChatClient innerClient,
@@ -67,7 +67,7 @@ internal sealed class GenAiMessageContentChatClient(
             options,
             cancellationToken);
 
-        return activity is null || traceConfig.HideOutputs
+        return activity is null || !traceConfig.CaptureAiContent
             ? updates
             : RecordStreamingOutputAsync(activity, updates, cancellationToken);
     }
@@ -95,7 +95,7 @@ internal sealed class GenAiMessageContentChatClient(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options)
     {
-        if (activity is null || traceConfig.HideInputs)
+        if (activity is null || !traceConfig.CaptureAiContent)
         {
             return messages;
         }
@@ -114,7 +114,7 @@ internal sealed class GenAiMessageContentChatClient(
 
     private void RecordOutput(Activity? activity, ChatResponse response)
     {
-        if (activity is null || traceConfig.HideOutputs)
+        if (activity is null || !traceConfig.CaptureAiContent)
         {
             return;
         }

@@ -34,11 +34,7 @@ public class GenAiMessageContentChatClientTests
                     FinishReason = ChatFinishReason.Stop,
                 },
             ]),
-            OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-                    ? "true"
-                    : null));
+            OpenInferenceTraceConfig.Enabled);
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var update in client.GetStreamingResponseAsync(
@@ -81,8 +77,7 @@ public class GenAiMessageContentChatClientTests
                     FinishReason = ChatFinishReason.Stop,
                 },
             ]),
-            OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = true, HideOutputs = true }));
+            OpenInferenceTraceConfig.Disabled);
 
         await foreach (var _ in client.GetStreamingResponseAsync(
                            [new ChatMessage(ChatRole.User, "private request")]))

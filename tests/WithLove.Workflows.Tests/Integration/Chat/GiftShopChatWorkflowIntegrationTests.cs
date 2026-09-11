@@ -123,13 +123,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             2 => Final("I found a keepsake box."),
             _ => throw new InvalidOperationException($"Unexpected model call {call}."),
         });
-        var visibleContent = OpenInferenceTraceConfig.Create(new OpenInferenceOptions
-        {
-            HideInputs = false,
-            HideOutputs = false,
-        }, static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-            ? "true"
-            : null);
+        var visibleContent = OpenInferenceTraceConfig.Enabled;
         await using var harness = await GiftShopChatWorkerHarness.StartAsync(
             fixture.Environment,
             chatClient,
@@ -361,11 +355,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
             instrumentation,
             CreateTelemetryIdentity(),
-            OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-                    ? "true"
-                    : null));
+            OpenInferenceTraceConfig.Enabled);
         await chatService.InitializeAsync();
 
         var result = await chatService.SendMessageAsync("Keep adding the keepsake");
@@ -435,11 +425,7 @@ public class GiftShopChatWorkflowIntegrationTests(GiftShopChatTemporalFixture fi
             new WebAnonymousChatSession { ChatId = Guid.NewGuid().ToString("N") },
             instrumentation,
             CreateTelemetryIdentity(),
-            OpenInferenceTraceConfig.Create(
-                new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-                static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-                    ? "true"
-                    : null));
+            OpenInferenceTraceConfig.Enabled);
         await chatService.InitializeAsync();
 
         var incomplete = await chatService.SendMessageAsync("Add the keepsake");

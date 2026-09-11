@@ -311,13 +311,6 @@ internal static partial class WithLoveApplicationExtensions
         WithLoveApplication application,
         WithLoveParameters parameters)
     {
-        // The DOM handoff is a local verification seam, not an application feature. It is absent
-        // unless explicitly opted in and this local-only branch is never used for publishing.
-        if (builder.Configuration.GetValue<bool>("TelemetryVerification:ExposeOperationId"))
-        {
-            application.ShopSite.WithEnvironment("TelemetryVerification__ExposeOperationId", "true");
-        }
-
         var temporalServer = builder.AddTemporalDevContainer("temporal-server", options =>
         {
             options.ImageTag = "1.7.2";

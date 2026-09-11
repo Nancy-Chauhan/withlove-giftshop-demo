@@ -66,11 +66,7 @@ public class OpenInferenceToolFunctionTests
             "call-1",
             "safe-session",
             "operation-1",
-            OpenInferenceTraceConfig.Create(new OpenInferenceOptions
-            {
-                HideInputs = true,
-                HideOutputs = true,
-            }));
+            OpenInferenceTraceConfig.Disabled);
 
         await function.InvokeAsync(new AIFunctionArguments { ["query"] = "private" });
 
@@ -114,13 +110,7 @@ public class OpenInferenceToolFunctionTests
     }
 
     private static OpenInferenceTraceConfig VisibleContent { get; } =
-        OpenInferenceTraceConfig.Create(new OpenInferenceOptions
-        {
-            HideInputs = false,
-            HideOutputs = false,
-        }, static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-            ? "true"
-            : null);
+        OpenInferenceTraceConfig.Enabled;
 
     private static Activity? StartToolActivity(ActivitySource source) =>
         source.StartActivity(

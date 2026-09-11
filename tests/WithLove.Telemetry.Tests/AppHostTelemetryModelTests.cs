@@ -94,7 +94,6 @@ public class AppHostTelemetryModelTests
         web.Should().NotContainKey("TelemetryIdentity__KeyVersion");
         model.Resources.OfType<ParameterResource>().Should().NotContain(resource =>
             resource.Name == "telemetry-identity-key");
-        web.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
         AssertCaptureEnvironment(products, expectedCapture: false);
         AssertCaptureEnvironment(worker, expectedCapture: false);
         AssertCaptureEnvironment(web, expectedCapture: false);
@@ -164,35 +163,6 @@ public class AppHostTelemetryModelTests
     }
 
     [Fact]
-    public async Task LocalVerificationOptIn_ExposesOnlyTheOperationId()
-    {
-        var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.WithLove_AppHost>(
-            args: ["TelemetryVerification:ExposeOperationId=true"]);
-        await using var app = await builder.BuildAsync();
-        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
-
-        foreach (var service in model.Resources.OfType<ProjectResource>())
-        {
-            var environment = await ResolveEnvironmentAsync(service, builder.ExecutionContext);
-            if (service.Name == "shopSite")
-            {
-                environment["TelemetryVerification__ExposeOperationId"].Should().Be("true");
-                AssertCaptureEnvironment(environment, expectedCapture: false);
-            }
-            else if (service.Name == "workflowServer")
-            {
-                environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
-                AssertCaptureEnvironment(environment, expectedCapture: false);
-            }
-            else
-            {
-                environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
-                AssertCaptureEnvironment(environment, expectedCapture: false);
-            }
-        }
-    }
-
-    [Fact]
     public async Task AiContentCaptureOptIn_EnablesOnlyWebAndWorkflowServer()
     {
         var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.WithLove_AppHost>(
@@ -204,7 +174,6 @@ public class AppHostTelemetryModelTests
         {
             var environment = await ResolveEnvironmentAsync(service, builder.ExecutionContext);
             AssertCaptureEnvironment(environment, service.Name != "productsApi");
-            environment.Should().NotContainKey("TelemetryVerification__ExposeOperationId");
         }
     }
 

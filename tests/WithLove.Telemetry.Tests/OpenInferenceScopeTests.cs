@@ -6,11 +6,7 @@ namespace WithLove.Telemetry.Tests;
 
 public class OpenInferenceScopeTests
 {
-    private static readonly OpenInferenceTraceConfig VisibleContent = OpenInferenceTraceConfig.Create(
-        new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-        static name => name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
-            ? "true"
-            : null);
+    private static readonly OpenInferenceTraceConfig VisibleContent = OpenInferenceTraceConfig.Enabled;
 
     [Fact]
     public void Chain_HidingMode_ExportsContextAndRedactsContent()
@@ -24,11 +20,7 @@ public class OpenInferenceScopeTests
             UserId = "safe-user",
             Tags = ["withlove", "chat"],
         });
-        var privacy = OpenInferenceTraceConfig.Create(new OpenInferenceOptions
-        {
-            HideInputs = true,
-            HideOutputs = true,
-        });
+        var privacy = OpenInferenceTraceConfig.Disabled;
 
         using (var chain = source.StartChain("chat.turn", "raw prompt", privacy))
         {
@@ -53,7 +45,6 @@ public class OpenInferenceScopeTests
         Activity? stopped = null;
         using var listener = Listen(source, activity => stopped = activity);
         var privacy = OpenInferenceTraceConfig.Create(
-            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
             name => name switch
             {
                 OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => "false",
@@ -170,7 +161,7 @@ public class OpenInferenceScopeTests
         using var source = new ActivitySource("withlove-test-retriever-private");
         Activity? stopped = null;
         using var listener = Listen(source, activity => stopped = activity);
-        var privacy = OpenInferenceTraceConfig.Create(new OpenInferenceOptions { HideInputs = true });
+        var privacy = OpenInferenceTraceConfig.Disabled;
 
         using (var retriever = source.StartRetriever("product.search", "private query", privacy))
         {

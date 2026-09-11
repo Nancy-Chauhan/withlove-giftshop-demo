@@ -7,34 +7,27 @@ namespace WithLove.Telemetry.Tests;
 public class OpenInferencePrivacyAndContextTests
 {
     [Theory]
-    [InlineData("false", "false", "false", true, true)]
-    [InlineData("true", "false", "false", false, false)]
-    [InlineData("true", "true", "false", true, false)]
-    [InlineData("true", "false", "true", false, true)]
-    [InlineData("true", "true", "true", true, true)]
-    public void ApplicationCapturePolicy_AppliesMasterAuthorizationThenDirectionalRestrictions(
-        string captureAiContent,
-        string hideInputs,
-        string hideOutputs,
-        bool expectedHideInputs,
-        bool expectedHideOutputs)
+    [InlineData(null, false)]
+    [InlineData("false", false)]
+    [InlineData("False", false)]
+    [InlineData("true", true)]
+    [InlineData("TRUE", true)]
+    public void ApplicationCapturePolicy_DefaultsOffAndAcceptsBooleanValues(
+        string? configuredValue,
+        bool expectedCapture)
     {
-        string? Environment(string name) => name switch
-        {
-            OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable => captureAiContent,
-            OpenInferenceTraceConfig.HideInputsEnvironmentVariable => hideInputs,
-            OpenInferenceTraceConfig.HideOutputsEnvironmentVariable => hideOutputs,
-            _ => null
-        };
+        string? Environment(string name) =>
+            name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+                ? configuredValue
+                : null;
 
-        var configuration = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
+        var configuration = OpenInferenceTraceConfig.Create(Environment);
 
-        configuration.HideInputs.Should().Be(expectedHideInputs);
-        configuration.HideOutputs.Should().Be(expectedHideOutputs);
+        configuration.CaptureAiContent.Should().Be(expectedCapture);
     }
 
     [Fact]
-    public void ApplicationCaptureDenial_OverridesStandardOptInAndExplicitUnhideOptions()
+    public void ApplicationCaptureDenial_OverridesStandardOptIn()
     {
         static string? Environment(string name) => name switch
         {
@@ -43,37 +36,33 @@ public class OpenInferencePrivacyAndContextTests
             _ => null
         };
 
-        var configuration = OpenInferenceTraceConfig.Create(
-            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-            Environment);
+        var configuration = OpenInferenceTraceConfig.Create(Environment);
 
-        configuration.HideInputs.Should().BeTrue();
-        configuration.HideOutputs.Should().BeTrue();
+        configuration.CaptureAiContent.Should().BeFalse();
     }
 
     [Fact]
-    public void MissingApplicationPolicy_DefaultsToHiddenAndCannotBeBypassed()
+    public void MissingApplicationPolicy_DefaultsToDisabledAndIgnoresStandardOptIn()
     {
         static string? Environment(string name) =>
             name == "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT" ? "true" : null;
 
-        var standardOptIn = OpenInferenceTraceConfig.Create(getEnvironmentVariable: Environment);
-        var explicitDirections = OpenInferenceTraceConfig.Create(
-            new OpenInferenceOptions { HideInputs = false, HideOutputs = false },
-            static _ => null);
+        var standardOptIn = OpenInferenceTraceConfig.Create(Environment);
 
-        standardOptIn.HideInputs.Should().BeTrue();
-        standardOptIn.HideOutputs.Should().BeTrue();
-        explicitDirections.HideInputs.Should().BeTrue();
-        explicitDirections.HideOutputs.Should().BeTrue();
+        standardOptIn.CaptureAiContent.Should().BeFalse();
     }
 
-    [Fact]
-    public void ApplicationCapturePolicy_RejectsMalformedValue()
+    [Theory]
+    [InlineData("")]
+    [InlineData("yes")]
+    [InlineData(" true ")]
+    public void ApplicationCapturePolicy_RejectsMalformedValues(string configuredValue)
     {
         var action = () => OpenInferenceTraceConfig.Create(
-            getEnvironmentVariable: name =>
-                name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable ? "yes" : null);
+            name =>
+                name == OpenInferenceTraceConfig.CaptureAiContentEnvironmentVariable
+                    ? configuredValue
+                    : null);
 
         action.Should().Throw<InvalidOperationException>()
             .WithMessage("*Telemetry__CaptureAiContent*true*false*");

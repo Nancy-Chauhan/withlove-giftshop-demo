@@ -104,7 +104,7 @@ internal sealed class OpenInferenceToolFunction(
         if (activity is null)
             return;
 
-        if (traceConfig.HideInputs)
+        if (!traceConfig.CaptureAiContent)
         {
             activity.SetTag(OpenInferenceAttributes.InputValue, OpenInferenceTraceConfig.RedactedValue);
             activity.SetTag(OpenInferenceAttributes.InputMimeType, null);
@@ -123,7 +123,7 @@ internal sealed class OpenInferenceToolFunction(
         if (activity is null)
             return;
 
-        if (traceConfig.HideOutputs)
+        if (!traceConfig.CaptureAiContent)
         {
             activity.SetTag(OpenInferenceAttributes.OutputValue, OpenInferenceTraceConfig.RedactedValue);
             activity.SetTag(OpenInferenceAttributes.OutputMimeType, null);

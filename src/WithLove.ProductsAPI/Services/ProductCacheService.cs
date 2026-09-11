@@ -20,11 +20,7 @@ namespace WithLove.ProductsAPI.Services;
 public partial class ProductCacheService : IProductCacheService
 {
     private static readonly OpenInferenceTraceConfig SearchTraceConfig =
-        OpenInferenceTraceConfig.Create(new OpenInferenceOptions
-        {
-            HideInputs = true,
-            HideOutputs = true,
-        });
+        OpenInferenceTraceConfig.Disabled;
 
     private readonly ProductsDbContext _dbContext;
     private readonly IFusionCache _cache;

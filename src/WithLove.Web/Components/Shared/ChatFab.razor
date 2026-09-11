@@ -2,7 +2,6 @@
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 @inject ILogger<ChatFab> Logger
-@inject IConfiguration Configuration
 
 @if (!_isOpen)
 {
@@ -145,10 +144,6 @@ else
                 </button>
             </div>
         </div>
-        @if (ExposeOperationId && !string.IsNullOrWhiteSpace(_lastOperationId))
-        {
-            <span hidden data-telemetry-verification data-operation-id="@_lastOperationId"></span>
-        }
     </div>
 }
 
@@ -164,9 +159,6 @@ else
     private ElementReference _messagesContainer;
     private ElementReference _scrollAnchor;
     private bool _needsScrollToBottom;
-    private string? _lastOperationId;
-    private bool ExposeOperationId =>
-        Configuration.GetValue<bool>("TelemetryVerification:ExposeOperationId");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -221,7 +213,6 @@ else
         }
 
         _currentMessage = "";
-        _lastOperationId = null;
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
@@ -262,9 +253,6 @@ else
         // established.
         if (ChatService.IsThinking || _sessionUnavailable) return;
 
-        // Never let browser automation mistake the preceding turn for the one in flight.
-        _lastOperationId = null;
-
         // Show user message + thinking indicator immediately
         ChatService.Messages.Add(new ChatHistoryEntry(true, message, DateTime.UtcNow));
         ChatService.IsThinking = true;
@@ -277,7 +265,6 @@ else
         {
             // Await Temporal round-trip — thinking dots visible during this await
             result = await ChatService.SendMessageAsync(message);
-            _lastOperationId = result.OperationId;
         }
         catch (Exception exception)
         {
