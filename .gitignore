@@ -407,9 +407,10 @@ FodyWeavers.xsd
 # Aspire specific
 # .aspire/
 
-.tmp/ 
+.tmp/
 # playwright
 .playwright-mcp/
+.playwright-cli/
 
 .plan/
 .mockups/

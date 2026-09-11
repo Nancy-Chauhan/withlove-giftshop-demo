@@ -21,24 +21,10 @@ builder.ConfigureOpenTelemetry()
     .WithTracing(tracing =>
     {
         tracing.AddSource(Instrumentation.ActivitySourceName);
-        // FusionCache telemetry is intentionally disabled to keep cache operations out of traces.
-        // tracing.AddFusionCacheInstrumentation(opts =>
-        // {
-        //     opts.IncludeMemoryLevel = true;
-        //     opts.IncludeDistributedLevel = true;
-        //     opts.IncludeBackplane = true;
-        // });
     })
     .WithMetrics(metrics =>
     {
         metrics.AddMeter(Instrumentation.ActivitySourceName);
-        // FusionCache telemetry is intentionally disabled to keep cache measurements out of metrics.
-        // metrics.AddFusionCacheInstrumentation(opts =>
-        // {
-        //     opts.IncludeMemoryLevel = true;
-        //     opts.IncludeDistributedLevel = true;
-        //     opts.IncludeBackplane = true;
-        // });
     });
 
 builder.AddDefaultHealthChecks();
@@ -112,8 +98,6 @@ builder.Services.AddEmbeddingGenerator<string, Embedding<float>>(
     new OpenAI.Embeddings.EmbeddingClient("text-embedding-3-small", openaiKey)
         .AsIEmbeddingGenerator()
         .WithOpenTelemetryInstrumentation(Instrumentation.ActivitySourceName));
-
-builder.Services.AddScoped<EmbeddingService>();
 
 builder.Services.AddScoped<IProductCacheService, ProductCacheService>();
 

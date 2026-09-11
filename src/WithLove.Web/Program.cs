@@ -46,24 +46,10 @@ builder.ConfigureOpenTelemetry(
         tracing.AddProcessor(new ChatHydrationExportProcessor());
         tracing.AddSource(Instrumentation.ActivitySourceName);
         tracing.AddSource(TracingInterceptor.ClientSource.Name);
-        // FusionCache telemetry is intentionally disabled to keep cache operations out of traces.
-        // tracing.AddFusionCacheInstrumentation(opts =>
-        // {
-        //     opts.IncludeMemoryLevel = true;
-        //     opts.IncludeDistributedLevel = true;
-        //     opts.IncludeBackplane = true;
-        // });
     })
     .WithMetrics(metrics =>
     {
         metrics.AddMeter(Instrumentation.ActivitySourceName);
-        // FusionCache telemetry is intentionally disabled to keep cache measurements out of metrics.
-        // metrics.AddFusionCacheInstrumentation(opts =>
-        // {
-        //     opts.IncludeMemoryLevel = true;
-        //     opts.IncludeDistributedLevel = true;
-        //     opts.IncludeBackplane = true;
-        // });
     });
 
 builder.AddDefaultHealthChecks();

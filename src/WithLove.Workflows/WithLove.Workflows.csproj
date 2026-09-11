@@ -16,9 +16,7 @@
       <PackageReference Include="Stripe.Extensions.DependencyInjection" Version="0.6.4" />
       <PackageReference Include="TemporalCommunity.Extensions.AI" Version="0.14.2" />
       <PackageReference Include="Temporalio" Version="1.18.0" />
-      <PackageReference Include="Temporalio.Extensions.DiagnosticSource" Version="1.18.0" />
       <PackageReference Include="Temporalio.Extensions.Hosting" Version="1.18.0" />
-      <PackageReference Include="Temporalio.Extensions.OpenTelemetry" Version="1.18.0" />
     </ItemGroup>
 
     <ItemGroup>

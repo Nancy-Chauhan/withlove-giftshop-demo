@@ -302,12 +302,18 @@ public class ProductCacheServiceTests
         };
         A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
         var stopped = new List<Activity>();
+        using var testScope = new Activity(nameof(SearchProductsAsync_EmitsOneRetrieverOnMissAndNoneOnCacheHit)).Start();
+        var testTraceId = testScope.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = stopped.Add,
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == testTraceId)
+                    stopped.Add(activity);
+            },
         };
         ActivitySource.AddActivityListener(listener);
         var service = CreateService();
@@ -341,12 +347,18 @@ public class ProductCacheServiceTests
             .ToList();
         A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
         var stopped = new List<Activity>();
+        using var testScope = new Activity(nameof(SearchProductsAsync_BoundsRetrieverDocumentsToReturnedPageAndOmitsScores)).Start();
+        var testTraceId = testScope.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = stopped.Add,
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == testTraceId)
+                    stopped.Add(activity);
+            },
         };
         ActivitySource.AddActivityListener(listener);
         var service = CreateService();
@@ -374,12 +386,18 @@ public class ProductCacheServiceTests
         };
         A.CallTo(() => _fakeDbContext.Products).Returns(products.BuildMockDbSet());
         var stopped = new List<Activity>();
+        using var testScope = new Activity(nameof(SearchProductsAsync_PropagationOnlySpanDoesNotProjectRetrieverDocuments)).Start();
+        var testTraceId = testScope.TraceId;
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == Instrumentation.ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.PropagationData,
-            ActivityStopped = stopped.Add,
+            ActivityStopped = activity =>
+            {
+                if (activity.TraceId == testTraceId)
+                    stopped.Add(activity);
+            },
         };
         ActivitySource.AddActivityListener(listener);
         var service = CreateService();

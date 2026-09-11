@@ -8,7 +8,4 @@
   <ItemGroup>
     <PackageReference Include="OpenTelemetry" Version="1.18.0" />
   </ItemGroup>
-  <ItemGroup>
-    <None Update="Conventions/openinference-conventions.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
 </Project>

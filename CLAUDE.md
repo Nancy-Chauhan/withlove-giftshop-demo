@@ -1,6 +1,6 @@
 ## Project Overview
 
-WithLove Gift Shop is a .NET 10 distributed application built with .NET Aspire and Temporal for workflow orchestration. The frontend is a Blazor Web App with WebAssembly (WASM) interactive rendering.
+WithLove Gift Shop is a .NET 10 distributed application built with .NET Aspire and Temporal for workflow orchestration. The frontend is a Blazor Web App with Interactive Server rendering.
 
 ## Configuration Management
 
@@ -8,7 +8,7 @@ API keys are centralized in the Aspire AppHost using **parameters** — a single
 
 **Setting up secrets** (stored in AppHost user secrets, never committed; managed via Aspire CLI):
 
-Run from repo root — Aspire auto-discovers the AppHost (new in Aspire 13.2):
+Run from the repository root; Aspire auto-discovers the AppHost:
 
 ```bash
 # Define all parameters once
@@ -59,7 +59,7 @@ Projects read from environment variables — no appsettings duplication needed.
 dotnet build WithLoveShop.slnx
 
 # Run the full application via the Aspire AppHost (orchestrates all services)
-dotnet run --project src/WithLove.AppHost
+aspire start --apphost src/WithLove.AppHost/WithLove.AppHost.csproj
 
 # Run individual projects
 dotnet run --project src/WithLove.Web
@@ -95,7 +95,8 @@ dotnet run --project tools/WithLove.OpenInference.Generator -- verify
 
 ## Testing
 
-Three test projects: `WithLove.Web.Tests`, `WithLove.Workflows.Tests`, `WithLove.ProductsAPI.Tests`.
+Four test projects: `WithLove.Web.Tests`, `WithLove.Workflows.Tests`,
+`WithLove.ProductsAPI.Tests`, and `WithLove.Telemetry.Tests`.
 
 **Test counts are deliberately not recorded here.** They change with every commit that adds a test,
 and a stale count in documentation is worse than no count — it gets cited, trusted, and repeated.
@@ -142,14 +143,15 @@ It fakes the embedding generator and never starts the AppHost, so it runs in CI 
 
 ### Run tests project by project, not solution-wide
 
-`dotnet test WithLoveShop.slnx` runs the three test projects in parallel. The AppHost suite, the
+`dotnet test WithLoveShop.slnx` runs the test projects in parallel. The AppHost suite, the
 Temporal dev server and the SQL Server container then compete for the same machine, and the AppHost
 fixture times out — a red run that says nothing about the code. Run one project at a time:
 
 ```bash
-dotnet test tests/WithLove.Web.Tests/WithLove.Web.Tests.csproj          # ~0.1 s
-dotnet test tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj  # ~55 s
-dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj  # ~40 s
+dotnet test tests/WithLove.Web.Tests/WithLove.Web.Tests.csproj
+dotnet test tests/WithLove.Workflows.Tests/WithLove.Workflows.Tests.csproj
+dotnet test tests/WithLove.ProductsAPI.Tests/WithLove.ProductsAPI.Tests.csproj
+dotnet test tests/WithLove.Telemetry.Tests/WithLove.Telemetry.Tests.csproj
 ```
 
 CI is unaffected: it partitions by `Category=Unit` / `Category!=Unit`, so the AppHost suite is
@@ -163,7 +165,7 @@ already excluded from both steps.
   workflow replay against a recorded history
 - **Prompt safety** — prompt-injection sanitization, and the fields `UserContext` is allowed to
   carry into append-only workflow history
-- **Cart** — quantity bounds and saturating arithmetic across both `ICartService` implementations,
+- **Cart** — quantity bounds and saturating arithmetic in the production cart service,
   anonymous-cart merge, persistence
 - **Products API** — ETags and conditional requests, RFC 9457 Problem Details, API version
   validation, error and response-header middleware, caching, hybrid-search RRF merge, pagination
@@ -181,20 +183,26 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 ### Projects
 
-- **WithLove.AppHost** — Aspire orchestrator (Aspire.AppHost.Sdk 13.5.3). Entry point for running the full distributed application locally. Launches and manages all other services.
+- **WithLove.AppHost** — Aspire orchestrator. Entry point for running the full distributed application locally. Launches and manages all other services.
+- **Arize.Aspire.Hosting** — Local Aspire hosting integration for an Arize Phoenix resource, including endpoints, health checks, and reference wiring.
 - **WithLove.ServiceDefaults** — Shared Aspire service defaults library. Configures OpenTelemetry (tracing, metrics, logging), health checks (`/health`, `/alive`), HTTP resilience, and service discovery. Referenced by service projects.
 - **WithLove.Data** — Shared data access layer (class library). Contains EF Core `DbContext` and domain models (`Product`, `Category`) used across multiple services. Enables code reuse and consistent data access patterns across the application.
+- **WithLove.OpenInference** — Local, non-packable OpenInference conventions library used to apply consistent semantic attributes to application-owned spans.
 - **WithLove.Web** — Blazor Web App host. Serves the storefront with Static SSR plus Interactive Server render modes, hosts the Blazor components, shared web models/services, and the chat/Stripe/loyalty Temporal client code. There is **no** separate `.Client` WebAssembly project.
 - **WithLove.Workflows** — Temporal workflow and activity class library. Contains the durable chat workflow (`GiftShopChatWorkflow`), the tool catalog, and the Stripe/loyalty/onboarding/database workflows. Referenced by `WithLove.WorkflowServer` (implementations) and `WithLove.Web` (declarations and client-side contracts).
 - **WithLove.WorkflowServer** — Temporal worker host. Connects to Temporal (default `localhost:7233`) using `ClientEnvConfig.LoadClientConnectOptions()` for configuration. Registers a hosted worker on the `with-love-tasks` task queue. Also exposes an OpenAPI endpoint in development.
 - **WithLove.ProductsAPI** — ASP.NET Core Web API service. Implements REST endpoints for product and category management. References `WithLove.Data` for EF Core integration and `WithLove.ServiceDefaults` for Aspire telemetry and health checks.
+- **WithLove.OpenInference.Generator** — Development tool that regenerates the checked-in OpenInference attribute vocabulary.
+- **WithLove.Telemetry.Verifier** — Runtime verification tool for unified chat trace shape and privacy invariants.
+
+The four projects under `tests/` cover Web, workflows, ProductsAPI, and telemetry behavior.
 
 ### Key Dependencies
 
-- **Aspire 13.5.3** — Distributed application orchestration
-- **Temporal SDK (Temporalio 1.11.1)** — Workflow orchestration via `Temporalio.Extensions.Hosting`; the WorkflowServer reads Temporal connection config from environment variables (`ClientEnvConfig`)
-- **Blazor** — UI with combined Server + WebAssembly interactive rendering
-- **OpenTelemetry 1.15.0** — Observability (configured in ServiceDefaults)
+- **Aspire** — Distributed application orchestration
+- **Temporal SDK** — Workflow orchestration via `Temporalio.Extensions.Hosting`; the WorkflowServer reads Temporal connection config from environment variables (`ClientEnvConfig`)
+- **Blazor** — UI with Interactive Server rendering and static SSR for pages that opt out of interactive routing
+- **OpenTelemetry** — Observability configured in ServiceDefaults
 
 ### Prerequisites
 
@@ -221,29 +229,28 @@ This is a .NET Aspire distributed application using the XML-based `.slnx` soluti
 
 Components are organized by type in `src/WithLove.Web/Components/`:
 - **`Layout/`** — App shell: MainLayout, SiteHeader, SiteFooter
-- **`Shared/`** — Reusable UI components: ProductCard*, CategoryCircle, TrustBadge, QuantitySelector, Breadcrumb, Pagination, ChatFab, QuizOverlay, etc.
+- **`Shared/`** — Reusable UI components: product cards, CategoryCircle, TrustBadge, QuantitySelector, Breadcrumb, ChatFab, and chat message rendering.
 - **`Pages/`** — Routable pages: Home, CollectionPage, ProductDetail, Cart, Checkout (and their supporting sub-components)
 
 **Web models and services** live inside the `WithLove.Web` project itself — there is no `WithLove.Shared` project:
-- `src/WithLove.Web/Models/` (namespace `WithLove.Web.Models`) — Product, Category, CartItem, GiftEnhancement, CheckoutModel, OrderSummary, BreadcrumbItem, AccountModels, etc.
-- `src/WithLove.Web/Services/` (namespace `WithLove.Web.Services`) — IProductService, ICartService, FusionCacheCartService, InMemoryCartService, ChatService, ILoyaltyService, etc.
+- `src/WithLove.Web/Models/` (namespace `WithLove.Web.Models`) — Product, Category, CartItem, GiftEnhancement, CheckoutModel, BreadcrumbItem, AccountModels, etc.
+- `src/WithLove.Web/Services/` (namespace `WithLove.Web.Services`) — IProductService, ICartService, FusionCacheCartService, ChatService, ILoyaltyService, etc.
 - Cross-process contracts shared with the worker (chat request/turn state, workflow inputs) live in `src/WithLove.Workflows/`, not in a `Shared` project.
 
 ## Blazor Render Modes
 
-The application uses **InteractiveServer** for interactive components (cart, checkout, product interactions) and **Static SSR** for static content (home, collection pages, layouts). This strategy prioritizes SEO while enabling real-time interactivity where needed.
+The application uses **InteractiveServer** as its default render mode. Identity pages that must write response headers opt out through `ExcludeFromInteractiveRouting` and use static SSR.
 
 **Render mode decisions:**
-- **Static SSR + StreamRendering:** Home, CollectionPage, ProductDetail (shell) — SEO-critical, no client interactivity needed
-- **InteractiveServer:** ProductInteractions, Cart, Checkout, CartBadge, QuantitySelector — share cart state via scoped DI services within the same SignalR circuit
-- **Static SSR (CSS toggle):** ChatFab, QuizOverlay — pure CSS checkbox hacks, no server state needed
+- **InteractiveServer:** Normal application pages and components, including product interactions, cart, checkout, and chat
+- **Static SSR:** Login, registration, and other pages that explicitly exclude interactive routing
 
-Avoid WebAssembly for now; InteractiveServer components share scoped DI services efficiently. WASM migration can happen later when Temporal backend exposes APIs.
+There is no WebAssembly client project. Interactive Server components share scoped services within a SignalR circuit.
 
 ## State Management
 
 **Cart state** is managed by `ICartService` registered as **scoped** (one instance per SignalR circuit):
-- `InMemoryCartService` uses a `List<CartItem>` + `Action? OnChange` event
+- `FusionCacheCartService` keeps the circuit-local snapshot and persists cart state through FusionCache
 - CartBadge, Cart, and Checkout pages subscribe to `OnChange` for UI updates
 - Gift enhancements are tracked as part of cart state
 - Scoped services ensure isolation between user circuits while allowing shared access within a circuit
@@ -276,7 +283,7 @@ Search merges two ranking strategies via **Reciprocal Rank Fusion (RRF)**:
 1. **Full-Text Search (FTS)** — SQL Server `FREETEXT` on product Name/Description. Falls back to `LIKE` if FTS unavailable.
 2. **Vector Search** — OpenAI embeddings with cosine distance similarity. Filtered to `maxCosineDistance = 0.8f` (0=identical, 2=opposite) to exclude irrelevant results.
 
-**RRF Formula**: `score = 1/(k+rank_fts) + 1/(k+rank_vector)` where k=60.0. Products appearing in both rankings get boosted scores.
+**RRF Formula**: `score = 1/(k+rank_fts) + 1/(k+rank_vector)` where k=60. Products appearing in both rankings get boosted scores.
 
 Products matching neither strategy return empty results (not "10 closest neighbors regardless of relevance").
 
@@ -321,7 +328,7 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 - **`Category`** = Internal/technical term used throughout C# code
   - Model: `WithLove.Web.Models.Category` (web/UI) and `WithLove.Data.Models.Category` (EF Core entity)
   - Service interface methods: `GetCategoryAsync()`, `GetCategoriesAsync()`, `GetProductsByCategoryAsync()`
-  - Component names: `CategoryCircle.razor`, `CategorySidebar.razor`
+  - Component names: `CategoryCircle.razor`
   - Variables: `category`, `categories`
   - Product properties: `CategoryId`, `CategoryName`, `SubCategory`
 
@@ -347,7 +354,7 @@ The **WithLove.Data** project is a shared class library that centralizes data ac
   - Soft delete pattern via `IsEnabled` boolean flag
   - Automatic UTC timestamp management (`AddedDate`, `UpdatedDate`)
   - Performance indexes on frequently-queried columns (`IsEnabled`, `AddedDate`, `CategoryId`, `SKU`)
-  - EF Core 10.0.3 with SQL Server provider
+  - EF Core with SQL Server provider
   - **Namespace pattern:** DbContext and migrations use `WithLove.Data` namespace (not ProductsAPI)
 
 **Why separate?** Moving the data layer to a shared project enables multiple services (WorkflowServer, future microservices, Worker processes) to use the same models and DbContext without code duplication. Currently only ProductsAPI consumes it, but this pattern scales as the application grows.
@@ -503,7 +510,7 @@ gh issue list --state open
 gh issue comment 15 --body "Fixed in PR #42"
 
 # View and manage releases
-gh release create v1.0.0 --title "Version 1.0.0"
+gh release create <tag> --title "<release title>"
 gh release list
 
 ```
