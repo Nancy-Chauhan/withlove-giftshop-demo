@@ -20,9 +20,8 @@ AI payload content is disabled by default. `Telemetry:CaptureAiContent=true` is 
 authorization that enables `input.value`/`output.value` on the application-owned `chat.turn` CHAIN,
 `gen_ai.input.messages`, `gen_ai.output.messages`, and `gen_ai.system_instructions` on the existing
 durable model span, plus TOOL arguments and results. AppHost sends the resolved value explicitly to
-Web and WorkflowServer through both `Telemetry__CaptureAiContent` and the standard
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` variable. An explicit application value of
-`false` overrides a conflicting inherited standard variable. `OPENINFERENCE_HIDE_INPUTS` and
+Web and WorkflowServer through `Telemetry__CaptureAiContent`. This is the only setting that can
+authorize capture; a missing or `false` value keeps payloads hidden. `OPENINFERENCE_HIDE_INPUTS` and
 `OPENINFERENCE_HIDE_OUTPUTS` remain additional per-direction restrictions when capture is enabled.
 The setting does not affect span structure, model/tool names, token counts, status, timing, routing,
 logs, metrics, error policy, or verification correlation IDs. Product retrieval/embedding payloads

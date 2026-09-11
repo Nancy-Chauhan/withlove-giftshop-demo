@@ -40,11 +40,9 @@ to `session.id`, `user.id`, or `conversation.id`.
 Sensitive inputs and outputs are disabled by default. The AppHost-level
 `Telemetry:CaptureAiContent=true` setting explicitly authorizes both directions for the chat CHAIN,
 the existing durable model span, and TOOL payloads. It is passed to services as
-`Telemetry__CaptureAiContent`; an explicit `false` value overrides the standard
-`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` variable and any attempt to unhide content in
-`OpenInferenceOptions`. `OPENINFERENCE_HIDE_INPUTS`, `OPENINFERENCE_HIDE_OUTPUTS`, and explicit hide
-options remain additional restrictions when capture is authorized. When the application setting is
-absent, the standard variable and explicit options retain their compatibility behavior. Any
+`Telemetry__CaptureAiContent`. A missing or `false` value keeps content hidden and cannot be
+overridden by `OpenInferenceOptions`. `OPENINFERENCE_HIDE_INPUTS`, `OPENINFERENCE_HIDE_OUTPUTS`, and
+explicit hide options remain additional restrictions when capture is authorized. Any
 content-capture change must preserve the trace privacy contract documented in `docs/telemetry.md`.
 
 ## Generated source
