@@ -55,11 +55,29 @@ public sealed class ChatIdentityRotator(
             return;
         }
 
-        // Read before overwriting. Reversed, the previous identity — and with it the only handle on
-        // the workflow that needs shutting down — is unrecoverable.
+        // Read before minting. The ordering looks load-bearing and is not: TryRead reads
+        // context.Request.Cookies, parsed once from the inbound header, while Mint only appends a
+        // Set-Cookie header to the response — neither collection can disturb the other. A mutation
+        // test that swapped these two lines passed the suite unchanged. The order is kept because
+        // read-then-replace is what a reader expects and it costs nothing, not because reversing it
+        // would lose the handle to the workflow being shut down.
+        //
+        // Mint is idempotent per request, and this is the call site that needs it. When the request
+        // arrived without a well-formed cookie, AnonymousChatMiddleware has already minted one and
+        // handed it to AnonymousChatSession; this call then returns that same value and writes
+        // nothing further, so the response carries exactly one Set-Cookie: wl-chat-id and the
+        // circuit's identity is the one the browser keeps. When the request did carry an identity
+        // the middleware minted nothing, so this is the first Mint of the request and issues a new
+        // value — rotation still replaces, it just no longer duplicates.
         var previousChatId = ChatIdentityCookie.TryRead(context);
         ChatIdentityCookie.Mint(context);
 
+        // No inbound cookie means no pointer to a previous run, so there is nothing to shut down —
+        // not a shutdown that is being skipped. A visitor whose cookie expired or was cleared mid
+        // session leaves their workflow running, and it is unreachable: the ID was derived from a
+        // value now lost on both sides. Those runs are reaped by the workflow's own 24-hour
+        // lifetime. Recovering them would mean holding a server-side chatId→session map, which is
+        // the state this cookie-only design exists to avoid.
         if (previousChatId is null)
             return;
 
