@@ -283,6 +283,9 @@ internal sealed class GiftShopProductsHandler : HttpMessageHandler
             var value when value.StartsWith("/api/products/search", StringComparison.Ordinal) =>
                 $$"""{"value":[{{ProductJson}}]}""",
             "/api/categories" => """{"value":[{"id":3,"name":"Comfort","description":"Warm gifts"}]}""",
+            // navigate_to_collection verifies the model-supplied ID against this route before it
+            // records a navigation, so an unmapped ID here now means "no such collection".
+            "/api/categories/3" => """{"id":3,"name":"Comfort","description":"Warm gifts"}""",
             "/api/products/category/3" => $$"""{"value":[{{ProductJson}}]}""",
             _ => string.Empty,
         };
