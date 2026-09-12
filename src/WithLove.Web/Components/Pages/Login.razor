@@ -167,9 +167,13 @@
             // Rotate before navigating away. Past this point the chat session ID becomes
             // giftshop-chat-{userId} and the anonymous run is orphaned, so the invariant holds in
             // one sentence: an anonymous chat identity never spans an authentication boundary.
-            // RotateAsync reads the old cookie first, then overwrites, then shuts the old session
-            // down on a short budget — it never throws, so a failed sign-out of chat cannot cost
-            // the customer their sign-in.
+            // RotateAsync reads the inbound cookie, mints a replacement, then shuts the old run
+            // down on a short budget. It does not overwrite: Mint appends a Set-Cookie header and
+            // is idempotent per request, so exactly one is written even when the middleware
+            // already minted earlier in this same request. If the inbound cookie was absent or
+            // expired there is no previous run to shut down, and rotation still happens — see R5
+            // in the anonymous-chat-identity design. It never throws, so a failed chat shutdown
+            // cannot cost the customer their sign-in.
             await ChatIdentity.RotateAsync(HttpContext);
 
             Navigation.NavigateTo(ReturnUrl ?? "/", forceLoad: true);
