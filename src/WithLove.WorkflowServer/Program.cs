@@ -78,6 +78,12 @@ builder.Services.AddEmbeddingGenerator<string, Embedding<float>>(
 
 builder.Services.AddChatClient(
     new GenAiMessageContentChatClient(
+        // "gpt-5-nano" is a floating alias, not a dated pin such as "gpt-5-nano-2025-08-07", and
+        // that is deliberate. WithLove is a reference sample: a dated snapshot eventually retires,
+        // and someone cloning this months from now would hit a hard failure with an unhelpful
+        // error. Slight model drift beats a sample that is reproducible and dead. The usual reason
+        // to pin — keeping prompt A/B results attributable to one model version — does not apply
+        // here, because this repo has no eval harness by choice. Pin the date if that changes.
         new OpenAI.Chat.ChatClient("gpt-5-nano", openaiKey).AsIChatClient(),
         OpenInferenceTraceConfig.Default))
     .Build();

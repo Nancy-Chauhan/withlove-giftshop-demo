@@ -298,19 +298,33 @@ Products matching neither strategy return empty results (not "10 closest neighbo
 - Tool iteration is explicitly capped at 40; incomplete turns apply no cart/navigation commands
 
 **Durable AI tools** (`GiftShopChatToolService` + `GiftShopChatToolCatalog`):
-- System prompt defines LA personality: warm, playful, conversational
+- System prompt (`GiftShopChatPrompt`) defines LA's voice: warm and conversational, but
+  deliberately understated rather than exclamatory. Its ground rules — never state a product
+  name, price or detail not read from a tool result, and never invent an ID — override the
+  stylistic guidance. It also tells LA to match the occasion before the product (sympathy and
+  apology get a plain, calm register), how to read each tool's failure strings, and what it
+  cannot answer at all (shipping, returns, order status, stock, discount codes).
 - 13 model-visible tools, frozen in `GiftShopChatToolCatalog.CreateDeclarations()` (that method is the single source of truth — update this list when it changes):
   - Catalog reads: `search_products`, `get_product_details`, `get_categories`, `browse_category`
   - Cart: `add_to_cart`, `remove_from_cart`, `view_cart`, `clear_cart`
   - Navigation: `navigate_to_product`, `navigate_to_collection`, `navigate_to_cart`, `navigate_to_checkout`
   - Loyalty: `view_loyalty_points`
-- Tool results are concise summaries, not raw JSON, to reduce token usage and improve accuracy
+- Loyalty tier thresholds and the redemption divisor are interpolated into the system prompt
+  from `LoyaltyContracts` — do not restate those numbers in prose, here or in the prompt
+- Tool results are concise summaries, not raw JSON, to reduce token usage and improve accuracy.
+  The model-facing summary carries no image URL — product imagery is resolved client-side from
+  the catalog. (An `ImageUrl` still travels on the typed `CartAction`, which the model never
+  sees but which is serialized into workflow history.)
+- `navigate_to_product` and `navigate_to_collection` resolve the ID server-side and return an
+  error string for an unknown one, so the model cannot navigate the customer to a dead route
 - Typed turn state accumulates cart/navigation commands sequentially and Web applies them only after a final response
 - `AddDurableAI` configures the shared worker's data converter, and `AddGiftShopChatWorkflowClient()` configures Web's DI `ITemporalClient` as a side effect — the same client `StripeEventHandler` and `TemporalLoyaltyService` use. Manually created Temporal clients must use `DurableAIDataConverter.Instance`. The converter is applied only while `DataConverter` is still `DataConverter.Default`; a custom converter or `PayloadCodec` causes a **silent, log-only skip**. See `docs/temporal-ai-chat.md`.
 
 **Blazor Integration** (`ChatService`):
 - Scoped service bridges Blazor UI ↔ Temporal workflow
-- Auth-based session IDs: `giftshop-chat-{userId}` or `giftshop-chat-anon-{guid}`
+- Auth-based session IDs: `giftshop-chat-{userId}`, or `giftshop-chat-anon-{chatId}` where
+  `chatId` comes from the `wl-chat-id` cookie — anonymous sessions are stable across refreshes
+  and tabs, not minted per circuit. The workflow starts on the first message, not on panel open.
 - Builds a cart snapshot for each turn so durable tools can evaluate current cart state
 - Applies cart actions locally only when the workflow returns `FinalResponse`
 

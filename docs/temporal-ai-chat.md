@@ -118,7 +118,7 @@ even within a single run. Setting it would imply an idempotency guarantee that d
 client instead asserts that the operation ID, `CorrelationId`, and `RequestData.OperationId` agree,
 turning a malformed send into a local throw rather than a Temporal round-trip.
 
-No durable tool performs an external *mutating* side effect (all six outbound calls are reads), so
+No durable tool performs an external *mutating* side effect — every outbound call is a read — so
 there is nothing for an idempotency key to protect today. If a tool with an external effect is ever
 added, it needs a real business idempotency key that is stable per logical send and survives
 continue-as-new — not the Update ID. Current tools return commands or perform reads; Web applies
@@ -187,11 +187,12 @@ customer-safe assistant text; UI filtering by itself is not a data-removal bound
 
 Temporal payload/history can contain:
 
-- customer name and email in model instructions;
+- customer name in model instructions;
 - user messages and operation identity;
 - user ID and cart snapshot in request/state data;
 - tool names, call IDs, arguments, product/cart/navigation results, loyalty balances, and errors;
-- final cart and navigation commands.
+- final cart and navigation commands — a cart command carries the product name, price,
+  Stripe price ID and image URL, none of which the model itself ever sees.
 
 Model instructions, user messages, and retained historical tool protocol are disclosed to the
 configured model provider. Never place secrets, credentials, authorization tokens, or unnecessary
@@ -216,10 +217,20 @@ durable history without being shown verbatim in the UI.
 at four entries. The local cap prevents an unexpectedly oversized provider response from consuming
 the model context even if the API ignores its `top=4` request.
 
-Authenticated workflow IDs use `giftshop-chat-{userId}`. Anonymous sessions use a new
-`giftshop-chat-anon-{guid}` ID. Starts use `WorkflowIdConflictPolicy.UseExisting` for an active
-session and `WorkflowIdReusePolicy.AllowDuplicate` after a closed session. This is a sample, so old
-`ChatAgentWorkflow` executions are not migrated.
+Authenticated workflow IDs use `giftshop-chat-{userId}`. Anonymous sessions use
+`giftshop-chat-anon-{chatId}`, where `chatId` is the value of the `wl-chat-id` cookie rather than a
+value minted per circuit — which is what lets an anonymous conversation survive a refresh, a second
+tab, or a dropped SignalR circuit. `AnonymousChatMiddleware` mints the cookie when it is absent, and
+login and logout rotate it; `ChatIdentityCookie` owns its name, options and validation. A cookie
+that is not exactly the shape this application mints is treated as absent, so an attacker-controlled
+string is never spliced into a workflow ID.
+
+The workflow is started lazily by the first message, not by opening the chat panel, so a visitor who
+opens the panel and never types creates nothing in Temporal. Starts use
+`WorkflowIdConflictPolicy.UseExisting` for an active session and
+`WorkflowIdReusePolicy.AllowDuplicate` after a closed session — so a cookie that outlives its
+workflow simply starts a new run under the same ID. This is a sample, so old `ChatAgentWorkflow`
+executions are not migrated.
 
 ## Wire-format compatibility and the rollback one-way door
 
