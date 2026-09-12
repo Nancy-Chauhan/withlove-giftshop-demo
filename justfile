@@ -30,8 +30,15 @@ build: restore
 # Alias: build
 compile: build
 
-# Start the full application stack with Phoenix and AI content capture disabled
-run: (run-phoenix "false")
+# `run` declares --capture itself and forwards it, so `just run --capture` behaves exactly like
+# `just run-phoenix --capture`. Without the attribute, just reads --capture as a second recipe
+# name and fails with "justfile does not contain recipe `--capture`" — the first thing anyone
+# tries, since run is the documented default. Keep the line below single: just uses the last
+# comment line as the `just --list` description.
+
+# Start the full stack with Phoenix; pass --capture to export AI payload content
+[arg("capture", long="capture", value="true")]
+run capture="false": (run-phoenix capture)
 
 # Start with Phoenix; pass --capture to export AI payload content
 [arg("Telemetry__CaptureAiContent", long="capture", value="true")]
