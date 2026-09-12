@@ -7,6 +7,18 @@ namespace WithLove.Web.Tests.Unit.Components;
 public class ChatMessageContentParserTests
 {
     [Fact]
+    public void Parse_CartConfirmationWithProductAndPrice_PreservesTheConfirmationAsText()
+    {
+        const string response =
+            "Velvet Crimson — $89.00 has been added to your cart. Would you like to add another item?";
+
+        var segment = ChatMessageContentParser.Parse(response).Should().ContainSingle().Which;
+
+        segment.Type.Should().Be(ChatMessageContentParser.SegmentType.Text);
+        segment.Content.Should().Be(response);
+    }
+
+    [Fact]
     public void Parse_ProductBlock_ProjectsOnlyDisplayFields()
     {
         const string response = """

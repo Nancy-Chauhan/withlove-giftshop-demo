@@ -58,6 +58,11 @@ public static partial class ChatMessageContentParser
     private static partial Regex LabeledProductHeadingRegex();
 
     [GeneratedRegex(
+        "\\b(?:has\\s+been|was)\\s+added\\s+to\\s+(?:your\\s+|the\\s+)?cart\\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex CartConfirmationRegex();
+
+    [GeneratedRegex(
         "(?<markdown>!?\\[(?<alt>[^\\]]*)\\]\\((?<url>https?://[^)\\s]+)(?:\\s+[^)]*)?\\))",
         RegexOptions.IgnoreCase)]
     private static partial Regex MarkdownImageRegex();
@@ -107,6 +112,17 @@ public static partial class ChatMessageContentParser
 
             var end = index + 1 < headings.Length ? headings[index + 1].Index : text.Length;
             var block = text[heading.Index..end];
+
+            // A confirmation such as "Velvet Crimson — $89.00 has been added to your cart" is
+            // conversational prose, not a recommendation. Rendering it as a compact product card
+            // hides the action the customer just asked us to perform.
+            if (CartConfirmationRegex().IsMatch(block))
+            {
+                AddTextSegment(segments, block);
+                lastIndex = end;
+                continue;
+            }
+
             var product = ParseProduct(heading, block);
 
             if (product is null)
