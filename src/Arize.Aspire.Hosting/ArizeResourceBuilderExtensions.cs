@@ -10,7 +10,7 @@ public static class ArizeResourceBuilderExtensions
     public const string AxApiKeyEnvironmentVariable = "Arize__Tracing__Ax__ApiKey";
     public const string AxSpaceIdEnvironmentVariable = "Arize__Tracing__Ax__SpaceId";
     public const string AxProtocolEnvironmentVariable = "Arize__Tracing__Ax__Protocol";
-    public const string DefaultImageTag = "19.18.0";
+    public const string DefaultImageTag = "20.10.0";
 
     /// <summary>
     /// Adds the open-source Arize Phoenix container. No storage volume is attached automatically;

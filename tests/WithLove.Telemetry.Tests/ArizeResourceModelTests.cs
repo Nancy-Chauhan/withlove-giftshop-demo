@@ -17,7 +17,7 @@ public class ArizeResourceModelTests
         var resource = model.Resources.OfType<PhoenixResource>().Should().ContainSingle().Subject;
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().Should().ContainSingle().Subject;
         image.Image.Should().Be("arizephoenix/phoenix");
-        image.Tag.Should().Be("19.18.0");
+        image.Tag.Should().Be("20.10.0");
         resource.Annotations.OfType<EndpointAnnotation>().Should().Contain(endpoint =>
             endpoint.Name == "http" && endpoint.TargetPort == 6006);
         resource.Annotations.OfType<EndpointAnnotation>().Should().Contain(endpoint =>
