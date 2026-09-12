@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Temporalio.Exceptions;
 using WithLove.Web.Middleware;
+using WithLove.Web.Tests.Fakes;
 
 namespace WithLove.Web.Tests.Unit.Services;
 
@@ -10,9 +11,22 @@ namespace WithLove.Web.Tests.Unit.Services;
 /// because the chat backend is unavailable.
 /// </summary>
 /// <remarks>
+/// <para>
 /// End Chat deliberately has no test here because it deliberately does not rotate: the cookie is
 /// <c>HttpOnly</c> and End Chat runs inside a SignalR circuit with no <c>HttpResponse</c> to write
 /// to. Its contract is covered by <c>ChatServiceTests</c> instead.
+/// </para>
+/// <para>
+/// Two things these tests deliberately stop short of. First, whether a browser withholds a
+/// <c>SameSite=Strict</c> cookie on a cross-site top-level navigation: the attribute this
+/// application emits is assertable, the user agent's send decision is not, so only the former is
+/// asserted. Second, what a browser does when one response carries two <c>Set-Cookie</c> headers
+/// for the same name: also a statement about user agents, and one this application no longer has to
+/// ask, because <c>ChatIdentityCookie.Mint</c> is idempotent per request. What is reachable
+/// in-process is that the response carries exactly one identity and that the session holds it,
+/// which is what
+/// <see cref="MiddlewareMintThenRotation_WritesOneIdentityAndTheSessionHoldsIt"/> asserts.
+/// </para>
 /// </remarks>
 public class ChatIdentityRotatorTests
 {
@@ -192,6 +206,94 @@ public class ChatIdentityRotatorTests
 
         context.Response.Headers.SetCookie.Should().BeEmpty();
         Fake.GetCalls(_workflowClient).Should().BeEmpty();
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task Rotate_WritesTheCookieWithExactlyTheOptionsTheDesignSpecifies()
+    {
+        // The rotation path writes wl-chat-id just as AnonymousChatMiddleware does, and until now
+        // nothing asserted its shape — only the value it carried. Both paths go through
+        // ChatIdentityCookie.Mint today, so this is a guard against a future rotation that stops
+        // doing so and quietly issues a cookie with different flags at the one moment the identity
+        // changes.
+        var cookies = new CapturingResponseCookies();
+        var context = CreateHttpContext(PreviousChatId);
+        context.Features.Set<IResponseCookiesFeature>(new CapturingResponseCookiesFeature(cookies));
+        var expectedExpiry = DateTimeOffset.UtcNow.AddHours(2);
+
+        await CreateRotator().RotateAsync(context);
+
+        // One Append and no Delete. The capturing double throws on Delete, so a rotation
+        // reimplemented as delete-then-append fails here rather than being silently accepted.
+        var appended = cookies.Appended.Should().ContainSingle().Subject;
+        appended.Name.Should().Be(ChatIdentityCookie.CookieName);
+        appended.Value.Should().MatchRegex("^[0-9a-f]{32}$").And.NotBe(PreviousChatId);
+
+        // Lax and not Strict. What is assertable is the attribute this application emits; whether a
+        // Strict cookie would then be withheld by a browser on a cross-site top-level navigation is
+        // a statement about user agents and is not reachable from a test at this level. See the
+        // class remarks.
+        appended.Options.SameSite.Should().Be(SameSiteMode.Lax);
+        appended.Options.HttpOnly.Should().BeTrue();
+        appended.Options.Secure.Should().BeTrue();
+        appended.Options.IsEssential.Should().BeFalse();
+        appended.Options.MaxAge.Should().BeNull();
+        appended.Options.Expires.Should().NotBeNull();
+        appended.Options.Expires!.Value.Should().BeCloseTo(expectedExpiry, TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public async Task MiddlewareMintThenRotation_WritesOneIdentityAndTheSessionHoldsIt()
+    {
+        // The real pipeline shape for a login or logout that arrives without a usable chat cookie —
+        // one whose two hour lifetime has run out, say. AnonymousChatMiddleware runs first and mints
+        // because TryRead saw nothing; the endpoint then rotates. This once produced two
+        // Set-Cookie: wl-chat-id headers on one response, leaving the browser's choice between them
+        // to decide whether AnonymousChatSession still described the visitor.
+        //
+        // Both halves of the fix are asserted, because either one alone is satisfiable by a broken
+        // implementation: exactly one identity is written (a rotation that stopped writing at all
+        // would also pass a count-free check), and it is the identity the session carries into the
+        // circuit. Rotation is not weakened by the deduplication — the value is minted during this
+        // request and so cannot predate the authentication boundary, which is the invariant
+        // rotation exists for.
+        var context = CreateHttpContext();
+        var session = new AnonymousChatSession();
+        await new AnonymousChatMiddleware(_ => Task.CompletedTask).InvokeAsync(context, session);
+
+        await CreateRotator().RotateAsync(context);
+
+        var issued = ReadAllChatIds(context);
+        issued.Should().ContainSingle().Which.Should().MatchRegex("^[0-9a-f]{32}$");
+        issued[0].Should().Be(session.ChatId);
+
+        // Nothing to shut down: the middleware's mint was never in the request, so TryRead returned
+        // null and no workflow ID was derived from an identity that never chatted. The run behind a
+        // cookie the visitor lost is unreachable by design and reaps itself on the workflow's own
+        // 24 hour lifetime.
+        Fake.GetCalls(_workflowClient).Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Every <c>wl-chat-id</c> value the response carries, in the order it was written.
+    /// </summary>
+    private static List<string> ReadAllChatIds(HttpContext context)
+    {
+        var prefix = $"{ChatIdentityCookie.CookieName}=";
+        return context.Response.Headers.SetCookie
+            .Select(header => header ?? string.Empty)
+            .Where(header => header.StartsWith(prefix, StringComparison.Ordinal))
+            .Select(header =>
+            {
+                var value = header[prefix.Length..];
+                var end = value.IndexOf(';');
+                return end < 0 ? value : value[..end];
+            })
+            .ToList();
     }
 
     private static DefaultHttpContext CreateStartedResponseContext(string chatCookie)

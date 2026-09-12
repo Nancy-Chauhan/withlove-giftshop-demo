@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using WithLove.Web.Middleware;
+using WithLove.Web.Tests.Fakes;
 
 namespace WithLove.Web.Tests.Unit.Middleware;
 
@@ -223,42 +224,4 @@ public class AnonymousChatMiddlewareTests
 
     #endregion
 
-    /// <summary>
-    /// Captures every <c>Append</c> with the options it was given, and fails a <c>Delete</c>.
-    /// </summary>
-    /// <remarks>
-    /// The <c>Set-Cookie</c> wire format does not carry <c>IsEssential</c> at all and expresses
-    /// <c>Expires</c> only to the second, so the options object is the only place the design's
-    /// decisions are fully observable. Deleting is rejected here rather than merely unasserted:
-    /// rotation must be a single overwriting <c>Append</c>, because two <c>Set-Cookie</c> headers
-    /// for one name is browser-dependent.
-    /// </remarks>
-    private sealed class CapturingResponseCookies : IResponseCookies
-    {
-        public List<(string Name, string Value, CookieOptions Options)> Appended { get; } = [];
-
-        public void Append(string key, string value) => Append(key, value, new CookieOptions());
-
-        public void Append(string key, string value, CookieOptions options) =>
-            Appended.Add((key, value, options));
-
-        public void Append(
-            ReadOnlySpan<KeyValuePair<string, string>> keyValuePairs,
-            CookieOptions options)
-        {
-            foreach (var pair in keyValuePairs)
-                Append(pair.Key, pair.Value, options);
-        }
-
-        public void Delete(string key) => throw new InvalidOperationException(
-            $"The {key} cookie must be overwritten with a single Append, never deleted first.");
-
-        public void Delete(string key, CookieOptions options) => Delete(key);
-    }
-
-    private sealed class CapturingResponseCookiesFeature(IResponseCookies cookies)
-        : IResponseCookiesFeature
-    {
-        public IResponseCookies Cookies => cookies;
-    }
 }
