@@ -223,6 +223,30 @@ public class GiftShopChatConfigurationTests
             "the conversation did not converge on a final answer.");
     }
 
+    /// <summary>
+    /// Guards against the hallucination pattern observed in production (2026-09-17): the model
+    /// responded to product-listing requests without calling any search tool in the current turn,
+    /// reusing product data from earlier turns or fabricating names, prices, and IDs outright.
+    /// The fix adds an explicit "in THIS turn" qualifier to the grounding rule so the model cannot
+    /// treat data from a previous tool call as permission to skip a fresh one.
+    /// </summary>
+    [Fact]
+    [Trait(TestTraits.Category, TestTraits.Unit)]
+    [Trait(TestTraits.Feature, TestTraits.Chat)]
+    public void BuildInstructions_RequiresFreshToolCallInCurrentTurnBeforeNamingProducts()
+    {
+        var instructions = GiftShopChatPrompt.BuildInstructions(null);
+
+        // The "in THIS turn" qualifier is the critical grounding guarantee. Without it, the model
+        // can cite a product it saw in an earlier turn — or one it invented — without making any
+        // tool call at all in the response that names the product.
+        instructions.Should().Contain("in THIS turn");
+        // The prompt must also tell the model how to handle comprehensive-list requests (e.g.
+        // "list all 10 chocolates") so it reaches for browse_category rather than hallucinating
+        // a count it cannot fulfil through search_products (which returns at most 4 results).
+        instructions.Should().Contain("Never invent products to fill a requested count");
+    }
+
     [Fact]
     [Trait(TestTraits.Category, TestTraits.Unit)]
     [Trait(TestTraits.Feature, TestTraits.Chat)]
