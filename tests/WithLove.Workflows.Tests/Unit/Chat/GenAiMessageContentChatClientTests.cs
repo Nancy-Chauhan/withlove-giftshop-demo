@@ -14,7 +14,7 @@ public class GenAiMessageContentChatClientTests
         var stopped = new List<Activity>();
         using var listener = Listen(source, stopped.Add);
         using var activity = source.StartActivity(
-            "chat test-model",
+            "chat unknown",
             ActivityKind.Client,
             default(ActivityContext),
             [
@@ -34,6 +34,7 @@ public class GenAiMessageContentChatClientTests
                     FinishReason = ChatFinishReason.Stop,
                 },
             ]),
+            "test-model",
             OpenInferenceTraceConfig.Enabled);
 
         var updates = new List<ChatResponseUpdate>();
@@ -52,6 +53,8 @@ public class GenAiMessageContentChatClientTests
             "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Find a gift\"}]}]");
         activity.GetTagItem("gen_ai.output.messages").Should().Be(
             "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"A lovely gift.\"}],\"finish_reason\":\"stop\"}]");
+        activity.GetTagItem("gen_ai.request.model").Should().Be("test-model");
+        activity.DisplayName.Should().Be("chat test-model");
         updates.Should().HaveCount(2);
 
         activity.Dispose();
@@ -64,7 +67,7 @@ public class GenAiMessageContentChatClientTests
         using var source = new ActivitySource("withlove-test-genai-message-content-hidden");
         using var listener = Listen(source, _ => { });
         using var activity = source.StartActivity(
-            "chat test-model",
+            "chat unknown",
             ActivityKind.Client,
             default(ActivityContext),
             [new KeyValuePair<string, object?>("gen_ai.operation.name", "chat")]);
@@ -77,6 +80,7 @@ public class GenAiMessageContentChatClientTests
                     FinishReason = ChatFinishReason.Stop,
                 },
             ]),
+            "test-model",
             OpenInferenceTraceConfig.Disabled);
 
         await foreach (var _ in client.GetStreamingResponseAsync(
@@ -88,6 +92,8 @@ public class GenAiMessageContentChatClientTests
         activity!.GetTagItem("gen_ai.system_instructions").Should().BeNull();
         activity.GetTagItem("gen_ai.input.messages").Should().BeNull();
         activity.GetTagItem("gen_ai.output.messages").Should().BeNull();
+        activity.GetTagItem("gen_ai.request.model").Should().Be("test-model");
+        activity.DisplayName.Should().Be("chat test-model");
     }
 
     private static ActivityListener Listen(ActivitySource source, Action<Activity> stopped)

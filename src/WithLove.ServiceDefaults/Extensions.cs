@@ -131,12 +131,19 @@ public static class Extensions
                 }
                 else if (routing.TraceDestination == TraceExportDestination.Ax)
                 {
-                    // Arize AX categorizes spans by openinference.span.kind. Drop the auto-instrumented
-                    // infrastructure spans (ASP.NET, HttpClient, EF Core, Temporal SDK) that carry no
-                    // kind so the LLM-observability views show agent spans instead of "UNKNOWN" noise.
-                    // Registered before the exporter and only on the AX path — the Aspire dashboard and
-                    // Phoenix destinations keep full-fidelity infrastructure traces.
-                    tracing.AddProcessor(new OpenInferenceOnlyExportProcessor());
+                    // Trim the AX export to the agent's meaningful spans. Opt in to a pure AI-only
+                    // tree with Telemetry:AiOnlyExport=true: the reparent processor first repoints the
+                    // AI spans onto the chat.turn root, so dropping their Temporal/HTTP parents no
+                    // longer orphans them. Left off, the filter keeps the connective spans so the tree
+                    // stays connected without reparenting. Registered before the exporter and only on
+                    // the AX path; Aspire and Phoenix keep full traces.
+                    var aiOnly = string.Equals(
+                        builder.Configuration["Telemetry:AiOnlyExport"],
+                        "true",
+                        StringComparison.OrdinalIgnoreCase);
+                    if (aiOnly)
+                        tracing.AddProcessor(new AiTraceReparentProcessor());
+                    tracing.AddProcessor(new AgentTraceExportFilter(aiOnly));
                     tracing.AddOtlpExporter("arize-ax", options =>
                     {
                         options.Endpoint = routing.Ax!.Endpoint;

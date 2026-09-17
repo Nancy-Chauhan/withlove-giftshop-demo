@@ -100,6 +100,7 @@ internal sealed class GiftShopChatWorkerHarness : IAsyncDisposable
         builder.Services.AddChatClient(
             new GenAiMessageContentChatClient(
                 chatClient,
+                "gpt-5-nano",
                 traceConfig ?? OpenInferenceTraceConfig.Default)).Build();
         builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(
             new NoopEmbeddingGenerator());

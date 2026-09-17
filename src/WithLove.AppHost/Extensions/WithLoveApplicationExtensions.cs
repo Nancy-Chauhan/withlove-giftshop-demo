@@ -285,18 +285,25 @@ internal static partial class WithLoveApplicationExtensions
         WithLoveParameters parameters,
         IResourceBuilder<ProjectResource> productsApi)
     {
+        // Configurable so a run can target a distinct Arize project (set OpenInference__ProjectName /
+        // OpenInference:ProjectName); defaults to the standard name when unset.
+        var openInferenceProjectName =
+            builder.Configuration["OpenInference:ProjectName"] is { Length: > 0 } configuredName
+                ? configuredName
+                : OpenInferenceProjectName;
+
         var workflowServer = builder.AddProject<Projects.WithLove_WorkflowServer>("workflowServer")
             .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey)
-            .WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
+            .WithEnvironment("OpenInference__ProjectName", openInferenceProjectName);
 
         workflowServer.WaitForAndReference(infrastructure.ProductsDatabase);
         workflowServer.WithReference(productsApi);
 
         var shopSite = builder.AddProject<Projects.WithLove_Web>("shopSite")
             .WithEnvironment("OPENAI_API_KEY", parameters.OpenAiKey)
-            .WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
+            .WithEnvironment("OpenInference__ProjectName", openInferenceProjectName);
 
-        productsApi.WithEnvironment("OpenInference__ProjectName", OpenInferenceProjectName);
+        productsApi.WithEnvironment("OpenInference__ProjectName", openInferenceProjectName);
 
         shopSite.WaitForAndReference(infrastructure.RedisCache);
         shopSite.WaitForAndReference(infrastructure.ProductsDatabase);

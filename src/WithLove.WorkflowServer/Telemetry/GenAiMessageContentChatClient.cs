@@ -21,13 +21,20 @@ namespace WithLove.WorkflowServer.Telemetry;
 /// </remarks>
 internal sealed class GenAiMessageContentChatClient(
     IChatClient innerClient,
+    string requestModel,
     OpenInferenceTraceConfig traceConfig) : DelegatingChatClient(innerClient)
 {
     private const string OperationNameAttribute = "gen_ai.operation.name";
+    private const string RequestModelAttribute = "gen_ai.request.model";
     private const string InputMessagesAttribute = "gen_ai.input.messages";
     private const string OutputMessagesAttribute = "gen_ai.output.messages";
     private const string SystemInstructionsAttribute = "gen_ai.system_instructions";
     private const string ConversationIdAttribute = "conversation.id";
+
+    private readonly string requestModel =
+        string.IsNullOrWhiteSpace(requestModel)
+            ? throw new ArgumentException("Request model must be provided.", nameof(requestModel))
+            : requestModel;
 
     private readonly OpenInferenceTraceConfig traceConfig =
         traceConfig ?? throw new ArgumentNullException(nameof(traceConfig));
@@ -42,6 +49,7 @@ internal sealed class GenAiMessageContentChatClient(
 
         var activity = GetCurrentChatActivity();
         RecordSessionIdentity(activity);
+        RecordRequestModel(activity);
         var preparedMessages = RecordInput(activity, messages, options);
         var response = await InnerClient
             .GetResponseAsync(preparedMessages, options, cancellationToken)
@@ -61,6 +69,7 @@ internal sealed class GenAiMessageContentChatClient(
 
         var activity = GetCurrentChatActivity();
         RecordSessionIdentity(activity);
+        RecordRequestModel(activity);
         var preparedMessages = RecordInput(activity, messages, options);
         var updates = InnerClient.GetStreamingResponseAsync(
             preparedMessages,
@@ -88,6 +97,21 @@ internal sealed class GenAiMessageContentChatClient(
     {
         if (activity?.GetTagItem(ConversationIdAttribute) is string { Length: > 0 } sessionId)
             activity.SetTag(OpenInferenceAttributes.SessionId, sessionId);
+    }
+
+    // The durable-chat package records gen_ai.response.model but not gen_ai.request.model; without
+    // the latter Arize cannot resolve a model name, so the span renders as "chat unknown" and cost
+    // stays blank. MEAI also freezes the span's DisplayName ("chat {request-model}") at creation,
+    // before this wrapper runs, so the title is already "chat unknown" and must be corrected too.
+    // This is model metadata, not message content, so it is set regardless of content capture, and
+    // only when the package has not already supplied the request model.
+    private void RecordRequestModel(Activity? activity)
+    {
+        if (activity is null || activity.GetTagItem(RequestModelAttribute) is not null)
+            return;
+
+        activity.SetTag(RequestModelAttribute, requestModel);
+        activity.DisplayName = $"chat {requestModel}";
     }
 
     private IEnumerable<ChatMessage> RecordInput(
